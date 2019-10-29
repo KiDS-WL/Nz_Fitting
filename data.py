@@ -20,7 +20,7 @@ class DataTuple(object):
     """
 
     cov = None
-    
+
     def __init__(self, z, n, dn):
         assert(len(z) == len(n))
         assert(len(z) == len(dn))
@@ -63,7 +63,7 @@ class DataTuple(object):
             new = DataTuple(self.z, n, self.dn)
             new.setCovariance(self.cov)
         return new
-    
+
     def plot(self, ax=None, **kwargs):
         """
         plot(self, ax=None, **kwargs)
@@ -109,7 +109,7 @@ class BootstrapFit(object):
         self._samples = np.asarray(fitsamples)
         self.n_samples, self.n_param = self._samples.shape
         assert(self.n_param == len(bestfit))
-    
+
     def paramBest(self):
         """
         Get the best fit parameters.
@@ -133,13 +133,17 @@ class BootstrapFit(object):
         """
         Get the best fit parameter correlation matrix.
         """
-        error = self.paramError()
+        errors = self.paramError()
         covar = self.paramCovar()
         corr = np.matmul(
-            np.matmul(np.diag(1.0 / error), covar), np.diag(1.0 / error))
+            np.matmul(np.diag(1.0 / errors), covar), np.diag(1.0 / errors))
         return corr
-    
+
     def plotSamples(self):
+        """
+        Plot the distribution of the fit parameter samples in a triangle plot
+        with corner.corner.
+        """
         return corner(self._samples)
 
     def plotCorr(self):

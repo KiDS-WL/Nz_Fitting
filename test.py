@@ -1,6 +1,8 @@
+#!/usr/bin/env python3
 import combfit
 import numpy as np
 from matplotlib import pyplot as plt
+
 
 if __name__ == "__main__":
 
@@ -41,7 +43,8 @@ if __name__ == "__main__":
 
     # set up a model with 13 components with linear amplitudes
     n_comp = 13
-    model = combfit.GaussianComb(n_comp, 0.07, 1.41 / n_comp)
+    zmin, zmax = 0.07, 1.41  # range of mocks
+    model = combfit.GaussianComb(n_comp, zmin, (zmax - zmin) / n_comp)
     # fit the model to the data
     opt = combfit.SingleBinFit(data, model)
     bestfit = opt.optimize(n_samples=1000)

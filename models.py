@@ -104,12 +104,12 @@ class BaseModel(object):
         n_z_max : array_like
             Upper model constraint.
         """
-        # resample the covariance matrix and evaluate the model
+        # resample the covariance matrix and evaluate the model for each sample
         param_samples = np.array([
             self(z, *p) for p in np.random.multivariate_normal(
                 bestfit.paramBest(), bestfit.paramCovar(),
                 size=bestfit.n_samples)])
-        # compute the values of the percentile of the model distribution
+        # compute the range of the percentiles of the model distribution
         p = (100.0 - percentile) / 2.0
         n_z_min, n_z_max = np.percentile(param_samples, [p, 100.0 - p], axis=0)
         return z, n_z_min, n_z_max
@@ -141,6 +141,7 @@ class BaseModel(object):
         plot_kwargs = {}
         plot_kwargs.update(kwargs)
         line = ax.plot(*self.modelBest(bestfit), **plot_kwargs)[0]
+        # add a shaded area that indicates the 68% model confidence
         try:
             plot_kwargs.pop("color")
         except KeyError:
@@ -162,7 +163,7 @@ class CombModel(BaseModel):
         # set the width / overlap between the components
         self.smoothing = smoothing
         self.sigmas = np.full_like(self.mus, dz * smoothing)
-    
+
     def autoSampling(self):
         """
         Automatic sampling of the model based on the spread of the components.

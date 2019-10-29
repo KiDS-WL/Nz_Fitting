@@ -47,8 +47,8 @@ class SingleBinFit(Optimizer):
         """
         _curve_fit_wrapper(resample=False)
 
-        Internal wrapper for scipy.optimize.curve_fit, automatically parsing
-        fit data and model. The data can be redsampled prior to fitting.
+        Internal wrapper for scipy.optimize.curve_fit to automatically parse
+        fit data and model. The data can be resampled prior to fitting.
 
         Parameters
         ----------
@@ -64,20 +64,22 @@ class SingleBinFit(Optimizer):
         popt : array_like
             Best fit model parameters.
         """
-        np.random.seed(  # reseed the RNG which is required for threadding
-            int.from_bytes(os.urandom(4), byteorder='little'))
-        # resample the input data in needed
-        fit_data = self.data.resample() if resample else self.data
+        if resample:
+            np.random.seed(  # reseed the RNG state for each thread
+                int.from_bytes(os.urandom(4), byteorder='little'))
+            fit_data = self.data.resample()
+        else:
+            fit_data = self.data
         popt, _ = curve_fit(
             self.model, fit_data.z, fit_data.n, sigma=fit_data.dn,
             p0=self.model.guess(), bounds=self.model.bounds(), **kwargs)
         return popt
 
-    def optimize(self, n_samples=1000, threads=-1, **kwargs):
+    def optimize(self, n_samples=1000, threads=None, **kwargs):
         """
         optimize(resample=False, n_samples=1000, threads=-1, **kwargs)
 
-        Internally computes the best fit parameters and their covariance from
+        Computes the best fit parameters and their covariance from
         resampling and re-fitting the input data errors/covariance.
 
         Parameters
@@ -88,8 +90,7 @@ class SingleBinFit(Optimizer):
             Number of resampling steps from data used to estimate the
             covariance.
         threads : int
-            Number of threads used for processing, defaults to -1 (all
-            threads).
+            Number of threads used for processing (defaults to all threads).
         **kwargs : keyword arguments
             Arugments parsed on to scipy.optimize.curve_fit
 
@@ -103,7 +104,7 @@ class SingleBinFit(Optimizer):
         # get the best fit parameters
         pbest = self._curve_fit_wrapper()
         # resample data points for each fit to estimate parameter covariance
-        if threads == -1:
+        if threads is None:
             threads = multiprocessing.cpu_count()
         threads = min(threads, n_samples)
         chunksize = n_samples // threads + 1  # optmizes the workload
@@ -113,7 +114,6 @@ class SingleBinFit(Optimizer):
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
                 threaded_fit, range(n_samples), chunksize=chunksize)
-        # compute the parameter covariance
         bestfit = BootstrapFit(pbest, param_samples)
         return bestfit
 
