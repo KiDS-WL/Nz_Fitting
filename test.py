@@ -48,6 +48,7 @@ if __name__ == "__main__":
     # fit the model to the data
     opt = combfit.SingleBinFit(data, model)
     bestfit = opt.optimize(n_samples=1000)
+    print("best fit with chi²/dof = %.3f" % opt.chisquareNdof(bestfit))
     # plot the parameter covariance
     bestfit.plotSamples()
     plt.show()

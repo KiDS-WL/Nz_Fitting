@@ -153,13 +153,13 @@ class BaseModel(object):
 
 class CombModel(BaseModel):
 
-    def __init__(self, n_comp, z0, dz, smoothing=1.0):
+    def __init__(self, n_param, z0, dz, smoothing=1.0):
         assert(smoothing >= 1.0)
         # distribute the components
         self.z0 = z0
         self.dz = dz
-        self.n_comp = n_comp
-        self.mus = np.arange(z0, z0 + n_comp * dz, dz)
+        self.n_param = n_param
+        self.mus = np.arange(z0, z0 + n_param * dz, dz)
         # set the width / overlap between the components
         self.smoothing = smoothing
         self.sigmas = np.full_like(self.mus, dz * smoothing)
@@ -258,7 +258,7 @@ class CombModel(BaseModel):
 
 class GaussianComb(CombModel):
     """
-    GaussianComb(n_comp, z0, dz, smoothing=1.0)
+    GaussianComb(n_param, z0, dz, smoothing=1.0)
 
     Redshift comb model with Gaussian components (distributed uniformly along
     the redshift axis) multiplied by redshift. The free parameters are the
@@ -268,7 +268,7 @@ class GaussianComb(CombModel):
 
     Parameters
     ----------
-    n_comp : int
+    n_param : int
         Number of Gaussian components.
     x0 : float
         Redshift of the first component.
@@ -278,22 +278,22 @@ class GaussianComb(CombModel):
         Widening factor of the component standard distribution, must be >= 1.
     """
 
-    def __init__(self, n_comp, z0, dz, smoothing=1.0):
-        super().__init__(n_comp, z0, dz, smoothing)
+    def __init__(self, n_param, z0, dz, smoothing=1.0):
+        super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
         """
         Parameter guess for the amplitudes in the format required by
         scipy.optmize.curve_fit.
         """
-        return np.ones(self.n_comp)
+        return np.ones(self.n_param)
 
     def bounds(self):
         """
         Parameter bounds for the amplitudes in the format required by
         scipy.optmize.curve_fit.
         """
-        return (np.full(self.n_comp, 0.0), np.full(self.n_comp, np.inf))
+        return (np.full(self.n_param, 0.0), np.full(self.n_param, np.inf))
 
     def __call__(self, z, *params):
         """
@@ -322,7 +322,7 @@ class GaussianComb(CombModel):
 
 class LogGaussianComb(CombModel):
     """
-    LogGaussianComb(n_comp, z0, dz, smoothing=1.0)
+    LogGaussianComb(n_param, z0, dz, smoothing=1.0)
 
     Redshift comb model with Gaussian components (distributed uniformly along
     the redshift axis) multiplied by redshift. The free parameters are the
@@ -332,7 +332,7 @@ class LogGaussianComb(CombModel):
 
     Parameters
     ----------
-    n_comp : int
+    n_param : int
         Number of Gaussian components.
     x0 : float
         Redshift of the first component.
@@ -342,15 +342,15 @@ class LogGaussianComb(CombModel):
         Widening factor of the component standard distribution, must be >= 1.
     """
 
-    def __init__(self, n_comp, z0, dz, smoothing=1.0):
-        super().__init__(n_comp, z0, dz, smoothing)
+    def __init__(self, n_param, z0, dz, smoothing=1.0):
+        super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
         """
         Parameter guess for the amplitudes in the format required by
         scipy.optmize.curve_fit.
         """
-        return np.zeros(self.n_comp)
+        return np.zeros(self.n_param)
 
     def __call__(self, z, *params):
         """

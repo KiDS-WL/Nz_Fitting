@@ -22,11 +22,14 @@ class DataTuple(object):
     cov = None
 
     def __init__(self, z, n, dn):
-        assert(len(z) == len(n))
-        assert(len(z) == len(dn))
         self.z = np.asarray(z)
+        assert(len(self) == len(n))
+        assert(len(self) == len(dn))
         self.n = np.asarray(n)
         self.dn = np.asarray(dn)
+
+    def __len__(self):
+        return len(self.z)
 
     def setCovariance(self, cov):
         """
@@ -40,7 +43,7 @@ class DataTuple(object):
             covariance matrix.
         """
         cov = np.asarray(cov)
-        assert(cov.shape == (len(self.z), len(self.z), ))
+        assert(cov.shape == (len(self), len(self), ))
         self.cov = cov
 
     def resample(self):

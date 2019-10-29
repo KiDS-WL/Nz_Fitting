@@ -17,9 +17,49 @@ class Optimizer(object):
         assert(isinstance(model, BaseModel))
         self.model = model
 
-    def _chisquare(self, params):
-        model_n = self.model(self.data.z, *params)
-        return np.sum(((model_n - self.data.n) / self.data.dn)**2)
+    def Ndof(self):
+        """
+        Degrees of freedom for model fit.
+        """
+        return len(self.data) - self.model.n_param
+
+    def chisquare(self, bestfit):
+        """
+        chisquare(self, bestfit)
+
+        Compute the fit chi^2 for a set of best-fit parameters.
+
+        Parameters
+        ----------
+        bestfit : BootstrapFit
+            Best-fit parameters used to evaluate the model.
+
+        Returns
+        -------
+        chisq : BootstrapFit
+        """
+        model_n = self.model(self.data.z, *bestfit.paramBest())
+        chisq = np.sum(((model_n - self.data.n) / self.data.dn)**2)
+        return chisq
+
+    def chisquareNdof(self, bestfit):
+        """
+        chisquare(self, bestfit)
+
+        Compute the fit chi^2 per degrees of freedom for a set of best-fit
+        parameters.
+
+        Parameters
+        ----------
+        bestfit : BootstrapFit
+            Best-fit parameters used to evaluate the model.
+
+        Returns
+        -------
+        chisqNdof : BootstrapFit
+        """
+        chisqNdof = self.chisquare(bestfit) / self.Ndof()
+        return chisqNdof
 
     def optimize(self, **kwargs):
         raise NotImplementedError
