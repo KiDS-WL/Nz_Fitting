@@ -1,13 +1,13 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
+from .data import FitParameters
+
 sqrt_two_pi = np.sqrt(2.0 * np.pi)
 
 
 def gaussian(x, mu, sigma):
     """
-    gaussian(x, mu, sigma)
-
     Sample a normal distribution function with mean and standard deviation.
 
     Parameters
@@ -59,14 +59,12 @@ class BaseModel(object):
 
     def modelBest(self, bestfit, z):
         """
-        modelBest(bestfit, z)
-
         Evaluate the fit model with the best fit parameters.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
         z : array_like
             Redshifts at with the model is sampled.
 
@@ -77,19 +75,20 @@ class BaseModel(object):
         n_z : array_like
             Model value.
         """
-        n_z = self(z, *bestfit.paramBest())
+        try:
+            n_z = self(z, *bestfit.paramBest())
+        except AttributeError:
+            n_z = self(z, *bestfit)
         return z, n_z
 
     def modelError(self, bestfit, z, percentile=68.0):
         """
-        modelError(z=None, percentile=68.0)
-
         Determine the fit upper and lower constraint given a percentile.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
+        bestfit : FitParameters
+            Best-fit parameters used to evaluate the model.
         z : array_like
             Redshifts at with the model is sampled.
         percentile : float
@@ -105,26 +104,67 @@ class BaseModel(object):
         n_z_max : array_like
             Upper model constraint.
         """
-        # resample the covariance matrix and evaluate the model for each sample
-        param_samples = np.array([
-            self(z, *p) for p in np.random.multivariate_normal(
-                bestfit.paramBest(), bestfit.paramCovar(),
-                size=bestfit.n_samples)])
+        # evaluate the model for each fit parameter sample
+        n_z_samples = np.empty((bestfit.n_samples, len(z)))
+        for i, params in enumerate(bestfit.paramSamples()):
+            _, n_z_samples[i] = self.modelBest(params, z)
         # compute the range of the percentiles of the model distribution
         p = (100.0 - percentile) / 2.0
-        n_z_min, n_z_max = np.percentile(param_samples, [p, 100.0 - p], axis=0)
+        n_z_min, n_z_max = np.percentile(n_z_samples, [p, 100.0 - p], axis=0)
         return z, n_z_min, n_z_max
+
+    def mean(self, bestfit, z):
+        """
+        Determine the mean of the redshfit model for given best fit parameters.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : array_like
+            Redshifts at with the model is sampled.
+
+        Returns
+        -------
+        z_mean : float
+            Mean of redshift model.
+        """
+        z, n_z = self.modelBest(bestfit, z)
+        z_mean = np.average(z, weights=n_z)
+        return z_mean
+
+    def meanError(self, bestfit, z):
+        """
+        Determine the standard error on the mean of the redshfit model for
+        given best fit parameters.
+
+        Parameters
+        ----------
+        bestfit : FitParameters
+            Best-fit parameters used to evaluate the model.
+        z : array_like
+            Redshifts at with the model is sampled.
+
+        Returns
+        -------
+        z_mean_err : float
+            Standard error of the Means of redshift model.
+        """
+        # compute the mean redshift for each fit parameter sample
+        z_mean_samples = np.empty(bestfit.n_samples)
+        for i, params in enumerate(bestfit.paramSamples()):
+            z_mean_samples[i] = self.mean(params, z)
+        z_mean_err = z_mean_samples.std()
+        return z_mean_err
 
     def plot(self, bestfit, z, ax=None, **kwargs):
         """
-        plot(self, ax=None, **kwargs)
-
         Create an error bar plot the data sample.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
+        bestfit : FitParameters
+            Best-fit parameters used to evaluate the model.
         z : array_like
             Redshifts at with the model is sampled.
         ax : matplotlib.axes
@@ -134,7 +174,7 @@ class BaseModel(object):
 
         Returns
         -------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Parameter best-fit container.
         """
         if ax is None:
@@ -154,31 +194,19 @@ class BaseModel(object):
 
 class PowerLawBias(BaseModel):
     """
-    PowerLawBias()
-
     Simple bias model of the form (1 + z)^a.
     """
 
     n_param = 1
 
     def guess(self):
-        """
-        Parameter guess for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
         return np.zeros(self.n_param)
 
     def bounds(self):
-        """
-        Parameter bounds for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
         return (np.full(self.n_param, -5.0), np.full(self.n_param, 5.0))
 
     def __call__(self, z, *params):
         """
-        PowerLawBias(z, *params)
-
         Evaluate the model on a redshift sampling with given bias
         parameters. Works with scipy.optmize.curve_fit.
 
@@ -219,85 +247,30 @@ class CombModel(BaseModel):
         return z
 
     def modelBest(self, bestfit, z=None):
-        """
-        modelBest(bestfit, z=None)
-
-        Evaluate the fit model with the best fit parameters.
-
-        Parameters
-        ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-
-        Returns
-        -------
-        z : array_like
-            Redshifts at with the model is sampled.
-        n_z : array_like
-            Model value.
-        """
         if z is None:
             z = self.autoSampling()
         z, n_z = super().modelBest(bestfit, z)
         return z, n_z
 
     def modelError(self, bestfit, z=None, percentile=68.0):
-        """
-        modelError(z=None, percentile=68.0)
-
-        Determine the fit upper and lower constraint given a percentile.
-
-        Parameters
-        ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-        percentile : float
-            Percentile to use for the model constraint, must be between 0.0
-            and 100.0.
-
-        Returns
-        -------
-        z : array_like
-            Redshifts at with the model is sampled.
-        n_z_min : array_like
-            Lower model constraint.
-        n_z_max : array_like
-            Upper model constraint.
-        """
         if z is None:
             z = self.autoSampling()
         z, n_z_min, n_z_max = super().modelError(bestfit, z, percentile)
         return z, n_z_min, n_z_max
 
+    def mean(self, bestfit, z=None):
+        if z is None:
+            z = self.autoSampling()
+        z_mean = super().mean(bestfit, z)
+        return z_mean
+
+    def meanError(self, bestfit, z=None):
+        if z is None:
+            z = self.autoSampling()
+        z_mean_err = super().meanError(bestfit, z)
+        return z_mean_err
+
     def plot(self, bestfit, z=None, ax=None, **kwargs):
-        """
-        plot(self, ax=None, **kwargs)
-
-        Create an error bar plot the data sample.
-
-        Parameters
-        ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-        ax : matplotlib.axes
-            Specifies the axis to plot on.
-        **kwargs : keyword arguments
-            Arugments parsed on to matplotlib.pyplot.plot and fill_between
-
-        Returns
-        -------
-        bestfit : BootstrapFit
-            Parameter best-fit container.
-        """
         if z is None:
             z = self.autoSampling()
         super().plot(bestfit, z, ax, **kwargs)
@@ -305,8 +278,6 @@ class CombModel(BaseModel):
 
 class GaussianComb(CombModel):
     """
-    GaussianComb(n_param, z0, dz, smoothing=1.0)
-
     Redshift comb model with Gaussian components (distributed uniformly along
     the redshift axis) multiplied by redshift. The free parameters are the
     (linear) amplitudes of the components. The stanard deviation of these
@@ -329,23 +300,13 @@ class GaussianComb(CombModel):
         super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
-        """
-        Parameter guess for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
         return np.ones(self.n_param)
 
     def bounds(self):
-        """
-        Parameter bounds for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
         return (np.full(self.n_param, 0.0), np.full(self.n_param, np.inf))
 
     def __call__(self, z, *params):
         """
-        GaussianComb(z, *params)
-
         Evaluate the model on a redshift sampling with given amplitude
         parameters. Works with scipy.optmize.curve_fit.
 
@@ -369,8 +330,6 @@ class GaussianComb(CombModel):
 
 class LogGaussianComb(CombModel):
     """
-    LogGaussianComb(n_param, z0, dz, smoothing=1.0)
-
     Redshift comb model with Gaussian components (distributed uniformly along
     the redshift axis) multiplied by redshift. The free parameters are the
     (logarithmic) amplitudes of the components. The stanard deviation of these
@@ -393,16 +352,10 @@ class LogGaussianComb(CombModel):
         super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
-        """
-        Parameter guess for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
         return np.zeros(self.n_param)
 
     def __call__(self, z, *params):
         """
-        LogGaussianComb(z, *params)
-
         Evaluate the model on a redshift sampling with given amplitude
         parameters. Works with scipy.optmize.curve_fit.
 
@@ -425,7 +378,7 @@ class LogGaussianComb(CombModel):
         return n_z
 
 
-class MultiBinModel(BaseModel):
+class BinnedRedshiftModel(BaseModel):
 
     def __init__(self, bins, weights):
         assert(all(isinstance(m, BaseModel) for m in bins))
@@ -437,25 +390,37 @@ class MultiBinModel(BaseModel):
         self.n_param = sum(self.n_param_model)
 
     def guess(self):
-        """
-        Parameter guess for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
+        # concatenate the guesess from the bin models
         guess = np.concatenate([m.guess() for m in self._models])
         return guess
 
     def bounds(self):
-        """
-        Parameter bounds for the amplitudes in the format required by
-        scipy.optmize.curve_fit.
-        """
+        # concatenate the bounds from the bin models
         lower_bound = np.concatenate([m.bounds()[0] for m in self._models])
         upper_bound = np.concatenate([m.bounds()[1] for m in self._models])
         return (lower_bound, upper_bound)
 
     def __call__(self, z, *params):
         """
-        Factory method for the model implementation.
+        Evaluate the model on a redshift sampling with given amplitude
+        parameters. Evaluates the bin models and computes their weighted sum as
+        model for the master sample. Works with scipy.optmize.curve_fit.
+
+        Parameters
+        ----------
+        z : array_like
+            Points at with the model is evaluated. These must be a
+            concatenation of the sampling points of all bins and the master
+            sample.
+        *params : float
+            Concatenation of the set of logarithmic component amplitudes for
+            the bins.
+
+        Returns
+        -------
+        n_z : array_like
+            Model evaluated for each bin and the master sample concatenated to
+            a single data vector.
         """
         # split the parameters
         bin_params = np.split(params, np.cumsum(self.n_param_model)[:-1])
@@ -473,80 +438,66 @@ class MultiBinModel(BaseModel):
         return n_z
 
     def autoSampling(self):
-        """
-        Factory method to automatically sample the model.
-        """
-        samplings = [m.autoSampling() for m in self._models]
-        z = np.concatenate(samplings)
-        master_bin = np.linspace(0.0, z.max(), len(samplings[0]))
-        return np.append(z, master_bin)
+        z = [m.autoSampling() for m in self._models]
+        z.append(
+            np.linspace(0.0, max(bz.max() for bz in z), len(z[0])))
+        return z
 
     def modelBest(self, bestfit, z=None):
         """
-        modelBest(bestfit, z=None)
-
-        Evaluate the fit model with the best fit parameters.
-
-        Parameters
-        ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-
-        Returns
-        -------
-        z : array_like
-            Redshifts at with the model is sampled.
-        n_z : array_like
-            Model value.
         """
         if z is None:
             z = self.autoSampling()
-        z, n_z = super().modelBest(bestfit, z)
+        try:
+            n_z = self(np.concatenate(z), *bestfit.paramBest())
+        except AttributeError:
+            n_z = self(np.concatenate(z), *bestfit)
+        n_z = np.split(n_z, self.n_models + 1)
         return z, n_z
 
     def modelError(self, bestfit, z=None, percentile=68.0):
         """
-        modelError(z=None, percentile=68.0)
-
-        Determine the fit upper and lower constraint given a percentile.
-
-        Parameters
-        ----------
-        bestfit : BootstrapFit
-            Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-        percentile : float
-            Percentile to use for the model constraint, must be between 0.0
-            and 100.0.
-
-        Returns
-        -------
-        z : array_like
-            Redshifts at with the model is sampled.
-        n_z_min : array_like
-            Lower model constraint.
-        n_z_max : array_like
-            Upper model constraint.
         """
         if z is None:
             z = self.autoSampling()
-        z, n_z_min, n_z_max = super().modelError(bestfit, z, percentile)
-        return z, n_z_min, n_z_max
+        n_z_samples = np.empty((bestfit.n_samples, len(z), len(z[0])))
+        for i, params in enumerate(bestfit.paramSamples()):
+            _, n_z_samples[i] = self.modelBest(params, z)
+        p = (100.0 - percentile) / 2.0
+        n_z_min, n_z_max = np.percentile(
+            n_z_samples, [p, 100.0 - p], axis=0)
+        return z, [n for n in n_z_min], [n for n in n_z_max]
+
+    def mean(self, bestfit, z=None):
+        """
+        """
+        if z is None:
+            z = self.autoSampling()
+        binned_z, binned_n_z = self.modelBest(bestfit, z)
+        z_means = np.array([
+            np.average(bz, weights=bn_z)
+            for bz, bn_z in zip(binned_z, binned_n_z)])
+        return z_means
+
+    def meanError(self, bestfit, z=None):
+        """
+        """
+        if z is None:
+            z = self.autoSampling()
+        # compute the mean redshift for each fit parameter sample
+        z_mean_samples = np.empty((bestfit.n_samples, self.n_models + 1))
+        for i, params in enumerate(bestfit.paramSamples()):
+            z_mean_samples[i] = self.mean(params, z)
+        z_means_err = z_mean_samples.std(axis=0)
+        return z_means_err
 
     def plot(self, bestfit, z=None, fig=None, **kwargs):
         """
-        plot(self, ax=None, **kwargs)
-
         Create an error bar plot the data sample.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Best-fit parameter used to evaluate the model.
         z : array_like
             Redshifts at with the model is sampled. If None, this is calculated
@@ -558,7 +509,7 @@ class MultiBinModel(BaseModel):
 
         Returns
         -------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Parameter best-fit container.
         """
         if fig is None:
@@ -574,19 +525,15 @@ class MultiBinModel(BaseModel):
         plot_kwargs = {}
         plot_kwargs.update(kwargs)
         # compute the plot values
-        bin_z = np.split(z, self.n_models + 1)
-        _, n_z = self.modelBest(bestfit, z)
-        bin_n_z = np.split(n_z, self.n_models + 1)
-        _, n_z_min, n_z_max = self.modelError(bestfit, z)
-        bin_n_z_min = np.split(n_z_min, self.n_models + 1)
-        bin_n_z_max = np.split(n_z_max, self.n_models + 1)
+        binned_z, binned_n_z = self.modelBest(bestfit, z)
+        binned_z, binned_n_z_min, binned_n_z_max = self.modelError(bestfit, z)
         for i, ax in enumerate(axes.flatten()):
-            line = ax.plot(bin_z[i], bin_n_z[i], **plot_kwargs)[0]
+            line = ax.plot(binned_z[i], binned_n_z[i], **plot_kwargs)[0]
             # add a shaded area that indicates the 68% model confidence
             try:
                 plot_kwargs.pop("color")
             except KeyError:
                 pass
             ax.fill_between(
-                bin_z[i], bin_n_z_min[i], bin_n_z_max[i], alpha=0.3,
+                binned_z[i], binned_n_z_min[i], binned_n_z_max[i], alpha=0.3,
                 color=line.get_color(), **plot_kwargs)
