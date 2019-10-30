@@ -89,7 +89,40 @@ class DataTuple(object):
             ax = plt.gca()
         plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
         plot_kwargs.update(kwargs)
-        plt.errorbar(self.z, self.n, yerr=self.dn, **plot_kwargs)
+        ax.errorbar(self.z, self.n, yerr=self.dn, **plot_kwargs)
+
+
+class MultiBinData(DataTuple):
+
+    def __init__(self, bins, master):
+        assert(all(isinstance(b, DataTuple) for b in bins))
+        assert(isinstance(master, DataTuple))
+        self._data = [*bins, master]
+        self.n_data = len(self._data)
+        # all input samples must have the same redshift sampling
+        assert(all(np.all(d.z == master.z) for d in self._data))
+        # assemble all data points into a vector
+        self.z = np.concatenate([d.z for d in self._data])
+        self.n = np.concatenate([d.n for d in self._data])
+        self.dn = np.concatenate([d.dn for d in self._data])
+
+    def plot(self, fig=None, **kwargs):
+        if fig is None:
+            # try to arrange the subplots in a grid
+            n_x = int(np.ceil(self.n_data / np.sqrt(self.n_data)))
+            n_y = int(np.ceil(self.n_data / n_x))
+            fig, axes = plt.subplots(
+                n_y, n_x, figsize=(4 * n_x, 4 * n_y), sharex=True, sharey=True)
+        else:
+            axes = np.asarray(fig.axes)
+        # plot data sets the axes and delete the remaining ones from the grid
+        for i, ax in enumerate(axes.flatten()):
+            try:
+                self._data[i].plot(ax=ax, **kwargs)
+            except IndexError:
+                fig.delaxes(axes.flatten()[i])
+        fig.tight_layout()
+        return fig
 
 
 class BootstrapFit(object):
@@ -130,7 +163,8 @@ class BootstrapFit(object):
         """
         Get the best fit parameter covariance matrix.
         """
-        return np.cov(self._samples, rowvar=False)
+        cov = np.cov(self._samples, rowvar=False)
+        return np.atleast_2d(cov)
 
     def paramCorr(self):
         """
