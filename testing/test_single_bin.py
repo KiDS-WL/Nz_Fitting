@@ -24,6 +24,9 @@ if __name__ == "__main__":
     opt = Nz_Fitting.CurveFit(data, model)
     bestfit = opt.optimize(n_samples=1000)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
+    zmean = model.mean(bestfit)
+    zmean_err = model.meanError(bestfit)
+    print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
     # plot the parameter covariance
     bestfit.plotSamples()
     plt.show()

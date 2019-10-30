@@ -27,14 +27,6 @@ if __name__ == "__main__":
     master = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
     # combine data into a multi-bin containter
     data = Nz_Fitting.BinnedRedshiftData(bins, master)
-    # plot a dummy bias model
-    alpha = 1.5
-    bestfit = Nz_Fitting.FitParameters(
-        [alpha], np.random.uniform(alpha, 0.05, size=(1000, 1)))
-    bias = Nz_Fitting.PowerLawBias()
-    bias.plot(bestfit, np.linspace(0.0, 2.0))
-    plt.ylim(bottom=0.0)
-    plt.show()
     # set up a model with 13 components with linear amplitudes
     n_comp = 13
     zmin, zmax = 0.07, 1.41  # range of mocks
@@ -46,6 +38,9 @@ if __name__ == "__main__":
     opt = Nz_Fitting.CurveFit(data, model)
     bestfit = opt.optimize(n_samples=100)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
+    zmeans = ", ".join("%.3f" % z for z in model.mean(bestfit))
+    zmeans_err = ", ".join("%.3f" % z for z in model.meanError(bestfit))
+    print("mean redshift = [%s] +- [%s]" % (zmeans, zmeans_err))
     # plot the parameter covariance
     bestfit.plotCorr()
     plt.show()
