@@ -20,16 +20,16 @@ if __name__ == "__main__":
     weights = []
     for zbin in zbins:
         fpath = os.path.join(wdir, "crosscorr_%s.yaw" % zbin)
-        data = Nz_Fitting.DataTuple(*np.loadtxt(fpath).T)
+        data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
         bins.append(data)
         weights.append(weight_dict[zbin])
     fpath = os.path.join(wdir, "crosscorr_%s.yaw" % "0.101z1.201")
-    master = Nz_Fitting.DataTuple(*np.loadtxt(fpath).T)
+    master = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
     # combine data into a multi-bin containter
-    data = Nz_Fitting.MultiBinData(bins, master)
+    data = Nz_Fitting.BinnedRedshiftData(bins, master)
     # plot a dummy bias model
     alpha = 1.5
-    bestfit = Nz_Fitting.BootstrapFit(
+    bestfit = Nz_Fitting.FitParameters(
         [alpha], np.random.uniform(alpha, 0.05, size=(1000, 1)))
     bias = Nz_Fitting.PowerLawBias()
     bias.plot(bestfit, np.linspace(0.0, 2.0))
@@ -41,11 +41,11 @@ if __name__ == "__main__":
     models = [
         Nz_Fitting.GaussianComb(n_comp, zmin, (zmax - zmin) / n_comp)
         for i in range(len(bins))]
-    model = Nz_Fitting.MultiBinModel(models, weights)
+    model = Nz_Fitting.BinnedRedshiftModel(models, weights)
     # fit the model to the data
     opt = Nz_Fitting.CurveFit(data, model)
     bestfit = opt.optimize(n_samples=100)
-    print("best fit with chi²/dof = %.3f" % opt.chisquareNdof(bestfit))
+    print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     # plot the parameter covariance
     bestfit.plotCorr()
     plt.show()

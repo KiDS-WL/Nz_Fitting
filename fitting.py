@@ -5,14 +5,14 @@ from functools import partial
 import numpy as np
 from scipy.optimize import curve_fit
 
-from .data import DataTuple, BootstrapFit
+from .data import FitParameters, RedshiftData
 from .models import BaseModel
 
 
 class Optimizer(object):
 
     def __init__(self, data, model):
-        assert(isinstance(data, DataTuple))
+        assert(isinstance(data, RedshiftData))
         self.data = data
         assert(isinstance(model, BaseModel))
         self.model = model
@@ -25,41 +25,36 @@ class Optimizer(object):
 
     def chisquare(self, bestfit):
         """
-        chisquare(self, bestfit)
-
-        Compute the fit chi^2 for a set of best-fit parameters.
+        Compute the chi^2 for a set of best-fit parameters.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Best-fit parameters used to evaluate the model.
 
         Returns
         -------
-        chisq : BootstrapFit
+        chisq : float
         """
         model_n = self.model(self.data.z, *bestfit.paramBest())
         chisq = np.sum(((model_n - self.data.n) / self.data.dn)**2)
         return chisq
 
-    def chisquareNdof(self, bestfit):
+    def chisquareReduced(self, bestfit):
         """
-        chisquare(self, bestfit)
-
-        Compute the fit chi^2 per degrees of freedom for a set of best-fit
-        parameters.
+        Compute the reduced chi^2 for a set of best-fit parameters.
 
         Parameters
         ----------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Best-fit parameters used to evaluate the model.
 
         Returns
         -------
-        chisqNdof : BootstrapFit
+        chisq_red : float
         """
-        chisqNdof = self.chisquare(bestfit) / self.Ndof()
-        return chisqNdof
+        chisq_red = self.chisquare(bestfit) / self.Ndof()
+        return chisq_red
 
     def optimize(self, **kwargs):
         raise NotImplementedError
@@ -67,14 +62,12 @@ class Optimizer(object):
 
 class CurveFit(Optimizer):
     """
-    CurveFit(data, model)
-
     A wrapper for scipy.optmize.curve_fit to fit a comb model to a redshift
     distribution with a bootstrap estimate of the fit parameter covariance.
 
     Parameters
     ----------
-    data : DataTuple
+    data : RedshiftData
         Input redshift distribution.
     model : BaseModel
         Gaussian comb model with give number of components.
@@ -85,8 +78,6 @@ class CurveFit(Optimizer):
 
     def _curve_fit_wrapper(self, *args, resample=False, **kwargs):
         """
-        _curve_fit_wrapper(resample=False)
-
         Internal wrapper for scipy.optimize.curve_fit to automatically parse
         fit data and model. The data can be resampled prior to fitting.
 
@@ -117,8 +108,6 @@ class CurveFit(Optimizer):
 
     def optimize(self, n_samples=1000, threads=None, **kwargs):
         """
-        optimize(resample=False, n_samples=1000, threads=-1, **kwargs)
-
         Computes the best fit parameters and their covariance from
         resampling and re-fitting the input data errors/covariance.
 
@@ -136,7 +125,7 @@ class CurveFit(Optimizer):
 
         Returns
         -------
-        bestfit : BootstrapFit
+        bestfit : FitParameters
             Parameter best-fit container.
         """
         guess = self.model.guess()
@@ -154,5 +143,5 @@ class CurveFit(Optimizer):
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
                 threaded_fit, range(n_samples), chunksize=chunksize)
-        bestfit = BootstrapFit(pbest, param_samples)
+        bestfit = FitParameters(pbest, param_samples)
         return bestfit

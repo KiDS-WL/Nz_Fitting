@@ -11,7 +11,7 @@ if __name__ == "__main__":
     wdir = os.path.dirname(__file__)
     # path to test file with columns (redshift, n(z), n(z) error)
     fpath = os.path.join(wdir, "crosscorr_0.101z1.201.yaw")
-    data = Nz_Fitting.DataTuple(*np.loadtxt(fpath).T)
+    data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
     # path to data covariance matrix (only for resampling)
     # fpath = ...
     # data.setCovariance(np.loadtxt(fpath))
@@ -23,7 +23,7 @@ if __name__ == "__main__":
     # fit the model to the data
     opt = Nz_Fitting.CurveFit(data, model)
     bestfit = opt.optimize(n_samples=1000)
-    print("best fit with chi²/dof = %.3f" % opt.chisquareNdof(bestfit))
+    print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     # plot the parameter covariance
     bestfit.plotSamples()
     plt.show()
