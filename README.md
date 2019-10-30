@@ -2,4 +2,4 @@
 Repository for Nz fitting packages
 
 ## Issues
-- Currently only fitting single tomographic bins
+- Currently does not include the bias model in the fitting procedure
