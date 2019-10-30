@@ -208,6 +208,12 @@ class FitParameters(object):
         self.n_samples, self.n_param = self._samples.shape
         assert(self.n_param == len(bestfit))
 
+    def paramSamples(self):
+        """
+        Directly get the fit parameter samples.
+        """
+        return self._samples.copy()
+
     def paramBest(self):
         """
         Get the best fit parameters.
