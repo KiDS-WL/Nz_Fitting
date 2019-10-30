@@ -65,9 +65,9 @@ class Optimizer(object):
         raise NotImplementedError
 
 
-class SingleBinFit(Optimizer):
+class CurveFit(Optimizer):
     """
-    SingleBinFit(data, model)
+    CurveFit(data, model)
 
     A wrapper for scipy.optmize.curve_fit to fit a comb model to a redshift
     distribution with a bootstrap estimate of the fit parameter covariance.
@@ -156,9 +156,3 @@ class SingleBinFit(Optimizer):
                 threaded_fit, range(n_samples), chunksize=chunksize)
         bestfit = BootstrapFit(pbest, param_samples)
         return bestfit
-
-
-class JointBiasFit(Optimizer):
-
-    def __init__(self, data, model):
-        raise NotImplementedError
