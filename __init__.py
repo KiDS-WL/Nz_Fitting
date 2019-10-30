@@ -1,3 +1,3 @@
-from .data import DataTuple, BootstrapFit
-from .models import GaussianComb, LogGaussianComb
-from .fitting import SingleBinFit
+from .data import DataTuple, MultiBinData, BootstrapFit
+from .models import PowerLawBias, GaussianComb, LogGaussianComb, MultiBinModel
+from .fitting import CurveFit
