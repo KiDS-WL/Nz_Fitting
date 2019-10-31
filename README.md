@@ -6,7 +6,7 @@ Repository for Nz fitting packages
   - Data base class
   - Single redshift distribution
   - Set of tomographic bins
-- Fitting models with plotting routines and mean redshift calculation
+- Redshift models with plotting routines and mean redshift calculation
   - Model base class 
   - Simple bias model
   - Gaussian comb models with linear and logarithmic amplitude parameters
