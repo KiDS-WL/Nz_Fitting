@@ -10,7 +10,7 @@ Repository for Nz fitting packages
   - Model base class 
   - Simple bias model
   - Gaussian comb models with linear and logarithmic amplitude parameters
-  - Multi-bin models a set of tomographic bins
+  - Multi-bin model a set of tomographic bins
 - Fitting
   - Optimizer base class
   - Automatic wrapper for scipy.optimize.curve_fit
@@ -20,5 +20,5 @@ Repository for Nz fitting packages
 - Fitting the full KV450 sample yields a larger model uncertainty than the weighted sum of joint fits of all tomographic bins.
 
 ## Future Plans
-- MCMC sampler based on the Optimizer class
+- MCMC sampler (`emcee` or `PyMulitNest`) based on the optimizer base class
 - Supporting joint n(z) and bias model fits
