@@ -159,7 +159,8 @@ class BaseModel(object):
 
     def plot(self, bestfit, z, ax=None, **kwargs):
         """
-        Create an error bar plot the data sample.
+        Plot the model and its uncertainty based on a set of best fit
+        parameters.
 
         Parameters
         ----------
@@ -239,11 +240,21 @@ class CombModel(BaseModel):
         self.smoothing = smoothing
         self.sigmas = np.full_like(self.mus, dz * smoothing)
 
-    def autoSampling(self):
+    def autoSampling(self, n=200):
         """
         Automatic sampling of the model based on the spread of the components.
+
+        Parameters
+        ----------
+        n : int
+            Number of sampling points to generate.
+
+        Returns
+        -------
+        z : array_like
+            Sampling points.
         """
-        z = np.linspace(0.0, self.mus[-1] + 3.0 * self.sigmas[-1], 200)
+        z = np.linspace(0.0, self.mus[-1] + 3.0 * self.sigmas[-1], n)
         return z
 
     def modelBest(self, bestfit, z=None):
@@ -437,14 +448,46 @@ class BinnedRedshiftModel(BaseModel):
         n_z = np.concatenate([*bin_n_z, master_n_z])
         return n_z
 
-    def autoSampling(self):
-        z = [m.autoSampling() for m in self._models]
+    def autoSampling(self, n=200):
+        """
+        Automatic sampling of the model based on the spread of the components.
+        Invokes the autoSampling method of each bin and generates, based on
+        these, a sampling for the master sample.
+
+        Parameters
+        ----------
+        n : int
+            Number of sampling points to generate per bin.
+
+        Returns
+        -------
+        z : list of array_like
+            List of sampling points for each bin and the master sample.
+        """
+        z = [m.autoSampling(n) for m in self._models]
         z.append(
-            np.linspace(0.0, max(bz.max() for bz in z), len(z[0])))
+            np.linspace(0.0, max(bz.max() for bz in z), n))
         return z
 
     def modelBest(self, bestfit, z=None):
         """
+        Evaluate the fit model with the best fit parameters, splitting the
+        data by bins/master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+
+        Returns
+        -------
+        z : list of array_like
+            List of sampling points for each bin and the master sample.
+        n_z : list of array_like
+            List of model values for each bin and the master sample.
         """
         if z is None:
             z = self.autoSampling()
@@ -457,6 +500,28 @@ class BinnedRedshiftModel(BaseModel):
 
     def modelError(self, bestfit, z=None, percentile=68.0):
         """
+        Determine the fit upper and lower constraint given a percentile,
+        splitting the data by bins/master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+        percentile : float
+            Percentile to use for the model constraint, must be between 0.0
+            and 100.0.
+
+        Returns
+        -------
+        z : list of array_like
+            List of sampling points for each bin and the master sample.
+        n_z_min : list of array_like
+            List of model lower constraints for each bin and the master sample.
+        n_z_max : list of array_like
+            List of model upper constraints for each bin and the master sample.
         """
         if z is None:
             z = self.autoSampling()
@@ -470,6 +535,21 @@ class BinnedRedshiftModel(BaseModel):
 
     def mean(self, bestfit, z=None):
         """
+        Determine the mean of the redshfit model for given best fit parameters
+        for each bin and the master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+
+        Returns
+        -------
+        z_mean : list
+            List of mean of redshift model by bin/master sample.
         """
         if z is None:
             z = self.autoSampling()
@@ -481,6 +561,22 @@ class BinnedRedshiftModel(BaseModel):
 
     def meanError(self, bestfit, z=None):
         """
+        Determine the standard error on the mean of the redshfit model for
+        given best fit parameters for each bin and the master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+
+        Returns
+        -------
+        z_mean_err : list
+            List of standard error of the Means of redshift model by bin/master
+            sample.
         """
         if z is None:
             z = self.autoSampling()
@@ -493,24 +589,26 @@ class BinnedRedshiftModel(BaseModel):
 
     def plot(self, bestfit, z=None, fig=None, **kwargs):
         """
-        Create an error bar plot the data sample.
+        Plot the model and its uncertainty based on a set of best fit
+        parameters. Tomographic bins are arranged in a grid of separate plots
+        followed by the (full) master sample.
 
         Parameters
         ----------
         bestfit : FitParameters
             Best-fit parameter used to evaluate the model.
-        z : array_like
-            Redshifts at with the model is sampled. If None, this is calculated
-            from the redshift range spanned by the model components.
-        ax : matplotlib.axes
-            Specifies the axis to plot on.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+        fig : matplotlib.figure
+            Plot on an existig figure which must have at least n_data axes.
         **kwargs : keyword arguments
             Arugments parsed on to matplotlib.pyplot.plot and fill_between
 
         Returns
         -------
-        bestfit : FitParameters
-            Parameter best-fit container.
+        fig : matplotlib.figure
+            The figure containting the plots.
         """
         if fig is None:
             # try to arrange the subplots in a grid
