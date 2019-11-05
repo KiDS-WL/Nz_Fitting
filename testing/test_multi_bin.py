@@ -9,6 +9,19 @@ import Nz_Fitting
 
 if __name__ == "__main__":
 
+    ##############################################
+    #                                            #
+    #  Test the multi-bin fitting procedure      #
+    #  usage: test_multi_bin.py [n_samples=100]  #
+    #                                            #
+    ##############################################
+    import sys
+
+    if len(sys.argv) > 1:
+        n_samples = int(sys.argv[1])
+    else:
+        n_samples = 100
+
     wdir = os.path.dirname(__file__)
     # load test files with columns (redshift, n(z), n(z) error)
     zbins = [
@@ -36,7 +49,7 @@ if __name__ == "__main__":
     model = Nz_Fitting.BinnedRedshiftModel(models, weights)
     # fit the model to the data
     opt = Nz_Fitting.CurveFit(data, model)
-    bestfit = opt.optimize(n_samples=100)
+    bestfit = opt.optimize(n_samples=n_samples)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     zmeans = ", ".join("%.3f" % z for z in model.mean(bestfit))
     zmeans_err = ", ".join("%.3f" % z for z in model.meanError(bestfit))

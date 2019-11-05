@@ -8,6 +8,19 @@ import Nz_Fitting
 
 if __name__ == "__main__":
 
+    ###############################################
+    #                                             #
+    #  Test the single-bin fitting procedure      #
+    #  usage: test_multi_bin.py [n_samples=1000]  #
+    #                                             #
+    ###############################################
+    import sys
+
+    if len(sys.argv) > 1:
+        n_samples = int(sys.argv[1])
+    else:
+        n_samples = 1000
+
     wdir = os.path.dirname(__file__)
     # path to test file with columns (redshift, n(z), n(z) error)
     fpath = os.path.join(wdir, "crosscorr_0.101z1.201.yaw")
@@ -22,7 +35,7 @@ if __name__ == "__main__":
     model = Nz_Fitting.GaussianComb(n_comp, zmin, (zmax - zmin) / n_comp)
     # fit the model to the data
     opt = Nz_Fitting.CurveFit(data, model)
-    bestfit = opt.optimize(n_samples=1000)
+    bestfit = opt.optimize(n_samples=n_samples)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     zmean = model.mean(bestfit)
     zmean_err = model.meanError(bestfit)
