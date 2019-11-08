@@ -50,6 +50,16 @@ class RedshiftData(object):
                 "variance and diagonal of covariance matrix do not match")
         self.cov = cov
 
+    def plotCorr(self):
+        """
+        Plot the correlation matrix.
+        """
+        corr = np.matmul(
+            np.matmul(np.diag(1.0 / self.dn), self.cov),
+            np.diag(1.0 / self.dn))
+        im = plt.matshow(corr, vmin=-1, vmax=1, cmap="bwr")
+        plt.colorbar(im)
+
     def resample(self):
         """
         Resample the data based on the standard error or the covariance matrix.
