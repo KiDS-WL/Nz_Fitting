@@ -14,6 +14,9 @@ parser.add_argument(
     "-n", "--n-samples", type=int, default=1000,
     help="number of data samples to generate for covariance estimation "
          "(default: %(default)s)")
+parser.add_argument(
+    "-c", "--cov", action="store_true",
+    help="use the existing covariance matrices")
 
 
 if __name__ == "__main__":
@@ -33,6 +36,9 @@ if __name__ == "__main__":
         print("#### bin %s ####" % zbin)
         fpath = os.path.join(wdir, "crosscorr_%s.yaw" % zbin)
         data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
+        if args.cov:
+            fpath = os.path.join(wdir, "crosscorr_%s.cov" % zbin)
+            data.setCovariance(np.loadtxt(fpath))
         # fit the model to the data
         opt = Nz_Fitting.CurveFit(data, model)
         bestfit = opt.optimize(n_samples=args.n_samples)
@@ -47,6 +53,10 @@ if __name__ == "__main__":
     print("#### full sample ####")
     fpath = os.path.join(wdir, "crosscorr_0.101z1.201.yaw")
     data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
+    if args.cov:
+        fpath = os.path.join(wdir, "crosscorr_%s.cov" % zbin)
+        data.setCovariance(np.loadtxt(fpath))
+    # fit the model to the data
     opt = Nz_Fitting.CurveFit(data, model)
     bestfit = opt.optimize(n_samples=args.n_samples)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))

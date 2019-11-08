@@ -14,6 +14,9 @@ parser.add_argument(
     "-n", "--n-samples", type=int, default=100,
     help="number of data samples to generate for covariance estimation "
          "(default: %(default)s)")
+parser.add_argument(
+    "-c", "--cov", action="store_true",
+    help="use the existing covariance matrices")
 
 
 if __name__ == "__main__":
@@ -47,6 +50,12 @@ if __name__ == "__main__":
     full_data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
     # combine data into a multi-bin containter
     joint_data = Nz_Fitting.BinnedRedshiftData(bin_data, full_data)
+    if args.cov:
+        fpath = os.path.join(wdir, "crosscorr_global.cov")
+        joint_data.setCovariance(np.loadtxt(fpath))
+        joint_data.plotCorr()
+        plt.show()
+        plt.close()
 
     # fit the joint model to the joint data
     print("#### joint fit ####")
