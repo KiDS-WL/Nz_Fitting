@@ -611,11 +611,12 @@ class BinnedRedshiftModel(BaseModel):
             The figure containting the plots.
         """
         if fig is None:
+            n_data = self.n_models + 1
             # try to arrange the subplots in a grid
-            n_x = int(np.ceil(self.n_data / np.sqrt(self.n_data)))
-            n_y = int(np.ceil(self.n_data / n_x))
+            n_x = int(np.ceil(n_data / np.sqrt(n_data)))
+            n_y = int(np.ceil(n_data / n_x))
             fig, axes = plt.subplots(
-                n_y, n_x, figsize=(4 * n_x, 4 * n_y), sharex=True, sharey=True)
+                n_y, n_x, figsize=(3 * n_x, 3 * n_y), sharex=True, sharey=True)
         else:
             axes = np.asarray(fig.axes)
         if z is None:
