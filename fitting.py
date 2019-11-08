@@ -64,6 +64,8 @@ class CurveFit(Optimizer):
     """
     A wrapper for scipy.optmize.curve_fit to fit a comb model to a redshift
     distribution with a bootstrap estimate of the fit parameter covariance.
+    Automatically includes the data covariance if provided in the input data
+    container.
 
     Parameters
     ----------
@@ -97,12 +99,18 @@ class CurveFit(Optimizer):
         """
         if resample:
             np.random.seed(  # reseed the RNG state for each thread
-                int.from_bytes(os.urandom(4), byteorder='little'))
+                int.from_bytes(os.urandom(4), byteorder="little"))
             fit_data = self.data.resample()
         else:
             fit_data = self.data
+        # get the covariance matrix if possible
+        if fit_data.cov is not None:
+            sigma = fit_data.cov
+        else:
+            sigma = fit_data.dn
+        # run the optimizer
         popt, _ = curve_fit(
-            self.model, fit_data.z, fit_data.n, sigma=fit_data.dn,
+            self.model, fit_data.z, fit_data.n, sigma=sigma,
             p0=self.model.guess(), bounds=self.model.bounds(), **kwargs)
         return popt
 
