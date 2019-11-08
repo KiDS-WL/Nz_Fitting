@@ -55,11 +55,12 @@ if __name__ == "__main__":
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     # estimate the mean redshift and it's uncertainty
     zmeans = joint_model.mean(bestfit)
-    zmeans_err = joint_model.meanError(bestfit)
+    zmeans_err = joint_model.meanError(
+        bestfit, percentile=95.0, symmetric=False)  # is -nsigma, + nsigma
     stat_iter = zip([*zbins, "full sample"], zmeans, zmeans_err)
     for zbin, zmean, zmean_err in stat_iter:
         print("#### bin %s ####" % zbin)
-        print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
+        print("mean redshift = %.3f %+.3f %+.3f" % (zmean, *zmean_err))
 
     # plot the parameter covariance
     bestfit.plotCorr()

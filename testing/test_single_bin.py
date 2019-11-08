@@ -39,8 +39,9 @@ if __name__ == "__main__":
         print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
         # estimate the mean redshift and it's uncertainty
         zmean = model.mean(bestfit)
-        zmean_err = model.meanError(bestfit)
-        print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
+        zmean_err = model.meanError(
+            bestfit, percentile=95.0, symmetric=False)  # is -nsigma, + nsigma
+        print("mean redshift = %.3f %+.3f %+.3f" % (zmean, *zmean_err))
 
     # fit the model to the full data sample
     print("#### full sample ####")
@@ -51,8 +52,9 @@ if __name__ == "__main__":
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
     # estimate the mean redshift and it's uncertainty
     zmean = model.mean(bestfit)
-    zmean_err = model.meanError(bestfit)
-    print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
+    zmean_err = model.meanError(
+        bestfit, percentile=95.0, symmetric=False)  # is -nsigma, + nsigma
+    print("mean redshift = %.3f %+.3f %+.3f" % (zmean, *zmean_err))
 
     # plot the parameter covariance
     bestfit.plotSamples()
