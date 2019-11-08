@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from scipy.special import erfinv
 
 from .data import FitParameters
 
@@ -81,7 +82,7 @@ class BaseModel(object):
             n_z = self(z, *bestfit)
         return z, n_z
 
-    def modelError(self, bestfit, z, percentile=68.0):
+    def modelError(self, bestfit, z, percentile=68.3):
         """
         Determine the fit upper and lower constraint given a percentile.
 
@@ -133,10 +134,10 @@ class BaseModel(object):
         z_mean = np.average(z, weights=n_z)
         return z_mean
 
-    def meanError(self, bestfit, z):
+    def meanError(self, bestfit, z, percentile=68.3, symmetric=True):
         """
-        Determine the standard error on the mean of the redshfit model for
-        given best fit parameters.
+        Determine the uncertainty on the mean of the redshfit model for given
+        best fit parameters. Returns the standard error by default.
 
         Parameters
         ----------
@@ -144,17 +145,33 @@ class BaseModel(object):
             Best-fit parameters used to evaluate the model.
         z : array_like
             Redshifts at with the model is sampled.
+        percentile : float
+            Percentile to use for the model constraint, must be between 0.0
+            and 100.0.
+        symmetric : bool
+            Whether the upper and lower constraints should be symmetric.
 
         Returns
         -------
-        z_mean_err : float
-            Standard error of the Means of redshift model.
+        z_mean_err : list of float
+            Lower and upper constraint on the uncertainty.
         """
         # compute the mean redshift for each fit parameter sample
         z_mean_samples = np.empty(bestfit.n_samples)
         for i, params in enumerate(bestfit.paramSamples()):
             z_mean_samples[i] = self.mean(params, z)
-        z_mean_err = z_mean_samples.std()
+        if symmetric:
+            z_mean_err = z_mean_samples.std()
+            # scale sigma to match the requested percentile
+            nsigma = np.sqrt(2.0) * erfinv(percentile / 100.0)
+            z_mean_err *= nsigma
+            z_mean_err = [-z_mean_err, z_mean_err]
+        else:
+            p = (100.0 - percentile) / 2.0
+            z_mean_min, z_mean_max = np.percentile(
+                z_mean_samples, [p, 100.0 - p])
+            z_mean = self.mean(bestfit, z)
+            z_mean_err = [z_mean_min - z_mean, z_mean_max - z_mean]
         return z_mean_err
 
     def plot(self, bestfit, z, ax=None, **kwargs):
@@ -263,7 +280,7 @@ class CombModel(BaseModel):
         z, n_z = super().modelBest(bestfit, z)
         return z, n_z
 
-    def modelError(self, bestfit, z=None, percentile=68.0):
+    def modelError(self, bestfit, z=None, percentile=68.3):
         if z is None:
             z = self.autoSampling()
         z, n_z_min, n_z_max = super().modelError(bestfit, z, percentile)
@@ -275,10 +292,10 @@ class CombModel(BaseModel):
         z_mean = super().mean(bestfit, z)
         return z_mean
 
-    def meanError(self, bestfit, z=None):
+    def meanError(self, bestfit, z=None, percentile=68.3, symmetric=True):
         if z is None:
             z = self.autoSampling()
-        z_mean_err = super().meanError(bestfit, z)
+        z_mean_err = super().meanError(bestfit, z, percentile, symmetric)
         return z_mean_err
 
     def plot(self, bestfit, z=None, ax=None, **kwargs):
@@ -498,7 +515,7 @@ class BinnedRedshiftModel(BaseModel):
         n_z = np.split(n_z, self.n_models + 1)
         return z, n_z
 
-    def modelError(self, bestfit, z=None, percentile=68.0):
+    def modelError(self, bestfit, z=None, percentile=68.3):
         """
         Determine the fit upper and lower constraint given a percentile,
         splitting the data by bins/master sample.
@@ -548,7 +565,7 @@ class BinnedRedshiftModel(BaseModel):
 
         Returns
         -------
-        z_mean : list
+        z_mean : array_like
             List of mean of redshift model by bin/master sample.
         """
         if z is None:
@@ -559,10 +576,11 @@ class BinnedRedshiftModel(BaseModel):
             for bz, bn_z in zip(binned_z, binned_n_z)])
         return z_means
 
-    def meanError(self, bestfit, z=None):
+    def meanError(self, bestfit, z=None, percentile=68.3, symmetric=True):
         """
-        Determine the standard error on the mean of the redshfit model for
-        given best fit parameters for each bin and the master sample.
+        Determine the uncertainty on the mean of the redshfit model for given
+        best fit parameters for each bin and the master sample. Returns the
+        standard errors by default.
 
         Parameters
         ----------
@@ -571,20 +589,37 @@ class BinnedRedshiftModel(BaseModel):
         z : list of array_like
             A list of sampling points, split by bin/master sample at with the
             model is sampled.
+        percentile : float
+            Percentile to use for the model constraint, must be between 0.0
+            and 100.0.
+        symmetric : bool
+            Whether the upper and lower constraints should be symmetric.
 
         Returns
         -------
-        z_mean_err : list
-            List of standard error of the Means of redshift model by bin/master
-            sample.
+        z_means_err : array_like
+            List of pairs of lower and upper constraints on the undertainty of
+            the means of the redshift model by bin/master sample.
         """
         if z is None:
             z = self.autoSampling()
         # compute the mean redshift for each fit parameter sample
-        z_mean_samples = np.empty((bestfit.n_samples, self.n_models + 1))
+        z_means_samples = np.empty((bestfit.n_samples, self.n_models + 1))
         for i, params in enumerate(bestfit.paramSamples()):
-            z_mean_samples[i] = self.mean(params, z)
-        z_means_err = z_mean_samples.std(axis=0)
+            z_means_samples[i] = self.mean(params, z)
+        if symmetric:
+            z_means_err = z_means_samples.std(axis=0)
+            # scale sigma to match the requested percentile
+            nsigma = np.sqrt(2.0) * erfinv(percentile / 100.0)
+            z_means_err *= nsigma
+            z_means_err = np.transpose([-z_means_err, z_means_err])
+        else:
+            p = (100.0 - percentile) / 2.0
+            z_means_min, z_means_max = np.percentile(
+                z_means_samples, [p, 100.0 - p], axis=0)
+            z_means = self.mean(bestfit, z)
+            z_means_err = np.transpose([
+                z_means_min - z_means, z_means_max - z_means])
         return z_means_err
 
     def plot(self, bestfit, z=None, fig=None, **kwargs):
