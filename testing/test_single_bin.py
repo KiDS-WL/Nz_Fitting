@@ -1,51 +1,72 @@
 #!/usr/bin/env python3
+import argparse
 import os
+import sys
 
 import numpy as np
 from matplotlib import pyplot as plt
 
 import Nz_Fitting
 
+parser = argparse.ArgumentParser(
+    description="Test the single-bin fitting procedure.")
+parser.add_argument(
+    "-n", "--n-samples", type=int, default=1000,
+    help="number of data samples to generate for covariance estimation "
+         "(default: %(default)s)")
+
+
 if __name__ == "__main__":
-
-    ###############################################
-    #                                             #
-    #  Test the single-bin fitting procedure      #
-    #  usage: test_multi_bin.py [n_samples=1000]  #
-    #                                             #
-    ###############################################
-    import sys
-
-    if len(sys.argv) > 1:
-        n_samples = int(sys.argv[1])
-    else:
-        n_samples = 1000
-
+    args = parser.parse_args()
     wdir = os.path.dirname(__file__)
-    # path to test file with columns (redshift, n(z), n(z) error)
-    fpath = os.path.join(wdir, "crosscorr_0.101z1.201.yaw")
-    data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
-    # path to data covariance matrix (only for resampling)
-    # fpath = ...
-    # data.setCovariance(np.loadtxt(fpath))
+    zbins = [
+        "0.101z0.301", "0.301z0.501", "0.501z0.701",
+        "0.701z0.901", "0.901z1.201"]
 
     # set up a model with 13 components with linear amplitudes
     n_comp = 13
-    zmin, zmax = 0.07, 1.41  # range of mocks
+    zmin, zmax = 0.07, 1.41  # redshift range of mocks
     model = Nz_Fitting.GaussianComb(n_comp, zmin, (zmax - zmin) / n_comp)
-    # fit the model to the data
+
+    # fit the model to each tomographic bin
+    for zbin in zbins:
+        print("#### bin %s ####" % zbin)
+        fpath = os.path.join(wdir, "crosscorr_%s.yaw" % zbin)
+        data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
+        # fit the model to the data
+        opt = Nz_Fitting.CurveFit(data, model)
+        bestfit = opt.optimize(n_samples=args.n_samples)
+        print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
+        # estimate the mean redshift and it's uncertainty
+        zmean = model.mean(bestfit)
+        zmean_err = model.meanError(bestfit)
+        print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
+
+    # fit the model to the full data sample
+    print("#### full sample ####")
+    fpath = os.path.join(wdir, "crosscorr_0.101z1.201.yaw")
+    data = Nz_Fitting.RedshiftData(*np.loadtxt(fpath).T)
     opt = Nz_Fitting.CurveFit(data, model)
-    bestfit = opt.optimize(n_samples=n_samples)
+    bestfit = opt.optimize(n_samples=args.n_samples)
     print("best fit with chi²/dof = %.3f" % opt.chisquareReduced(bestfit))
+    # estimate the mean redshift and it's uncertainty
     zmean = model.mean(bestfit)
     zmean_err = model.meanError(bestfit)
     print("mean redshift = %.3f +- %.3f" % (zmean, zmean_err))
+
     # plot the parameter covariance
     bestfit.plotSamples()
     plt.show()
+    plt.close()
     bestfit.plotCorr()
     plt.show()
+    plt.close()
+
     # plot the data and best-fit model
     data.plot()
     model.plot(bestfit)
+    plt.xlabel(r"$z$", fontsize=13)
+    plt.ylabel(r"$p(z)$", fontsize=13)
+    plt.grid(alpha=0.25)
     plt.show()
+    plt.close()
