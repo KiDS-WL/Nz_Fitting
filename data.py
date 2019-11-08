@@ -41,7 +41,13 @@ class RedshiftData(object):
             covariance matrix.
         """
         cov = np.asarray(cov)
-        assert(cov.shape == (len(self), len(self), ))
+        if not cov.shape == (len(self), len(self), ):
+            raise ValueError(
+                ("data vector has length %d, but covariance " % len(self)) +
+                "matrix has shape %s" % str(cov.shape))
+        if not np.isclose(np.diag(cov), self.dn**2).all():
+            raise ValueError(
+                "variance and diagonal of covariance matrix do not match")
         self.cov = cov
 
     def resample(self):
