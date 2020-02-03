@@ -1,8 +1,10 @@
+from copy import copy
+
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.special import erfinv
 
-from .data import FitParameters
+from .data import RedshiftData, FitParameters
 
 sqrt_two_pi = np.sqrt(2.0 * np.pi)
 
@@ -32,6 +34,18 @@ def gaussian(x, mu, sigma):
 
 class BaseModel(object):
 
+    def getParamNo(self):
+        """
+        Number of free model parameters.
+        """
+        raise NotImplementedError
+
+    def getParamNames(self):
+        """
+        Names of the free model parameters.
+        """
+        raise NotImplementedError
+
     def guess(self):
         """
         Parameter guess for the amplitudes in the format required by
@@ -44,7 +58,7 @@ class BaseModel(object):
         Parameter bounds for the amplitudes in the format required by
         scipy.optmize.curve_fit.
         """
-        return (-np.inf, np.inf)
+        raise NotImplementedError
 
     def __call__(self):
         """
@@ -106,7 +120,7 @@ class BaseModel(object):
             Upper model constraint.
         """
         # evaluate the model for each fit parameter sample
-        n_z_samples = np.empty((bestfit.n_samples, len(z)))
+        n_z_samples = np.empty((len(bestfit), len(z)))
         for i, params in enumerate(bestfit.paramSamples()):
             _, n_z_samples[i] = self.modelBest(params, z)
         # compute the range of the percentiles of the model distribution
@@ -157,7 +171,7 @@ class BaseModel(object):
             Lower and upper constraint on the uncertainty.
         """
         # compute the mean redshift for each fit parameter sample
-        z_mean_samples = np.empty(bestfit.n_samples)
+        z_mean_samples = np.empty(len(bestfit))
         for i, params in enumerate(bestfit.paramSamples()):
             z_mean_samples[i] = self.mean(params, z)
         if symmetric:
@@ -212,16 +226,24 @@ class BaseModel(object):
 
 class PowerLawBias(BaseModel):
     """
-    Simple bias model of the form (1 + z)^a.
+    Simple bias model of the form (1 + z)^α.
     """
 
-    n_param = 1
+    def getParamNo(self):
+        return 1
+
+    def getParamNames(self, label=False):
+        if label:
+            return tuple([r"$\alpha$"])
+        else:
+            return tuple(["α"])
 
     def guess(self):
-        return np.zeros(self.n_param)
+        return np.zeros(self.getParamNo())
 
     def bounds(self):
-        return (np.full(self.n_param, -5.0), np.full(self.n_param, 5.0))
+        n_param = self.getParamNo()
+        return (np.full(n_param, -5.0), np.full(n_param, 5.0))
 
     def __call__(self, z, *params):
         """
@@ -244,6 +266,72 @@ class PowerLawBias(BaseModel):
         return b_z
 
 
+class BiasFitModel(BaseModel):
+    """
+    Compute a model for a redshift measurement from a sum of redshift bins and
+    a given model for the galaxy bias. The model free parameters are the
+    parameters of the bias model.
+
+    TODO: MISSING!
+    """
+
+    def __init__(self, bias, bins, full, weights):
+        assert(isinstance(bias, BaseModel))
+        self._bias = bias
+        assert(all(isinstance(tb, RedshiftData) for tb in bins))
+        self.bins = bins
+        assert(isinstance(full, RedshiftData))
+        self.full = full
+        assert(len(bins) == len(weights))
+        self.weights = np.asarray(weights) / sum(weights)
+
+    def getParamNo(self):
+        return self._bias.getParamNo()
+
+    def getParamNames(self, label=False):
+        return self._bias.getParamNames(label)
+
+    def guess(self):
+        return self._bias.guess()
+
+    def bounds(self):
+        return self._bias.bounds()
+
+    def __call__(self, z, *params):
+        """
+        Compute a model from the sum of tomographic bins that
+
+        Parameters
+        ----------
+        z : array_like
+            Dummy variable, automatically take from master sample.
+        *params : float
+            Set of bias parameters.
+
+        Returns
+        -------
+        b_z : array_like
+            Model evaluated at z.
+        """
+        bias = self._bias(self.full.z, *params)  # evaluate the given bias model
+        # evaluate the renormalisation of the full sample
+        renorm = np.trapz(self.full.n / bias, x=self.full.z)
+        # apply the bias correction to the bins and renormalize them as well
+        bin_nz = []
+        for nz in self.bins:
+            nz_debiased = nz.n / bias
+            nz_debiased /= np.trapz(nz_debiased, x=nz.z)
+            bin_nz.append(nz_debiased)
+        # compute the weighted sum of the bias corrected bins
+        nz_sum = np.sum([
+            nz * w for w, nz in zip(self.weights, bin_nz)], axis=0)
+        nz_full_model = bias * renorm * nz_sum
+        return nz_full_model
+
+    def plot(self, bestfit, ax=None, **kwargs):
+        super().plot(bestfit, self.full.z, ax, **kwargs)
+
+
 class CombModel(BaseModel):
 
     def __init__(self, n_param, z0, dz, smoothing=1.0):
@@ -251,11 +339,27 @@ class CombModel(BaseModel):
         # distribute the components
         self.z0 = z0
         self.dz = dz
-        self.n_param = n_param
+        self._n_param = n_param
         self.mus = np.arange(z0, z0 + n_param * dz, dz)
         # set the width / overlap between the components
         self.smoothing = smoothing
         self.sigmas = np.full_like(self.mus, dz * smoothing)
+
+    def getParamNo(self):
+        """
+        Number of free model parameters.
+        """
+        return copy(self._n_param)
+
+    def getParamNames(self, label=False):
+        """
+        Names of the free model parameters.
+        """
+        if label:
+            return tuple(
+                "$A_{%d}$" % (i + 1) for i in range(self.getParamNo()))
+        else:
+            return tuple("A_%d" % (i + 1) for i in range(self.getParamNo()))
 
     def autoSampling(self, n=200):
         """
@@ -328,10 +432,11 @@ class GaussianComb(CombModel):
         super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
-        return np.ones(self.n_param)
+        return np.ones(self.getParamNo())
 
     def bounds(self):
-        return (np.full(self.n_param, 0.0), np.full(self.n_param, np.inf))
+        n_param = self.getParamNo()
+        return (np.full(n_param, 0.0), np.full(n_param, np.inf))
 
     def __call__(self, z, *params):
         """
@@ -380,7 +485,7 @@ class LogGaussianComb(CombModel):
         super().__init__(n_param, z0, dz, smoothing)
 
     def guess(self):
-        return np.zeros(self.n_param)
+        return np.zeros(self.getParamNo())
 
     def __call__(self, z, *params):
         """
@@ -407,26 +512,57 @@ class LogGaussianComb(CombModel):
 
 
 class BinnedRedshiftModel(BaseModel):
+    """
+    TODO: MISSING!
+    """
 
-    def __init__(self, bins, weights):
+    def __init__(self, bins, weights, bias=None):
         assert(all(isinstance(m, BaseModel) for m in bins))
         assert(len(weights) == len(bins))
         self._models = [m for m in bins]
         self.weights = np.asarray(weights) / sum(weights)
         self.n_models = len(bins)
-        self.n_param_model = [m.n_param for m in bins]
-        self.n_param = sum(self.n_param_model)
+        self.n_param_models = [m.getParamNo() for m in bins]
+        if bias is not None:
+            assert(isinstance(bias, BaseModel))
+        self._bias = bias
+
+    def getParamNo(self):
+        n_param = sum(self.n_param_models)
+        if self._bias is not None:
+            n_param += self._bias.getParamNo()
+        return n_param
+
+    def getParamNames(self, label=False):
+        names = []
+        for i, model in enumerate(self._models):
+            if label:
+                names.extend(
+                    [r"$A_{%d,%d}$" % (i + 1, j + 1)
+                    for j in range(model.getParamNo())])
+            else:
+                names.extend(
+                    ["A_%d,%d" % (i + 1, j + 1)
+                    for j in range(model.getParamNo())])
+        if self._bias is not None:
+            names.append(self._bias.getParamNames(label))
+        return tuple(names)
 
     def guess(self):
-        # concatenate the guesess from the bin models
-        guess = np.concatenate([m.guess() for m in self._models])
-        return guess
+        # concatenate the guesses from the bin models
+        guess = [m.guess() for m in self._models]
+        if self._bias is not None:
+            guess.append(self._bias.guess())
+        return np.concatenate(guess)
 
     def bounds(self):
         # concatenate the bounds from the bin models
-        lower_bound = np.concatenate([m.bounds()[0] for m in self._models])
-        upper_bound = np.concatenate([m.bounds()[1] for m in self._models])
-        return (lower_bound, upper_bound)
+        lower_bound = [m.bounds()[0] for m in self._models]
+        upper_bound = [m.bounds()[1] for m in self._models]
+        if self._bias is not None:
+            lower_bound.append(self._bias.bounds()[0])
+            upper_bound.append(self._bias.bounds()[1])
+        return (np.concatenate(lower_bound), np.concatenate(upper_bound))
 
     def __call__(self, z, *params):
         """
@@ -450,15 +586,18 @@ class BinnedRedshiftModel(BaseModel):
             Model evaluated for each bin and the master sample concatenated to
             a single data vector.
         """
-        # split the parameters
-        bin_params = np.split(params, np.cumsum(self.n_param_model)[:-1])
+        # split parameters, last array is empty or holds bias model params
+        param_tuples = np.split(params, np.cumsum(self.n_param_models))
         # split the redshifts assuming there is the same number per sample
         bin_z = np.split(z, self.n_models + 1)
         # evaluate each model
         bin_n_z = []
         master_n_z = np.zeros_like(bin_z[-1])
         for i in range(self.n_models):
-            n_z = self._models[i](bin_z[i], *bin_params[i])
+            n_z = self._models[i](bin_z[i], *param_tuples[i])
+            if self._bias is not None:  # multiply with bias to mach data
+                bias_params = param_tuples[-1]
+                n_z *= self._bias(bin_z[i], *bias_params)
             # compute the wighted sum of bins which models the master sample
             master_n_z += n_z * self.weights[i]
             bin_n_z.append(n_z)
@@ -542,7 +681,7 @@ class BinnedRedshiftModel(BaseModel):
         """
         if z is None:
             z = self.autoSampling()
-        n_z_samples = np.empty((bestfit.n_samples, len(z), len(z[0])))
+        n_z_samples = np.empty((len(bestfit), len(z), len(z[0])))
         for i, params in enumerate(bestfit.paramSamples()):
             _, n_z_samples[i] = self.modelBest(params, z)
         p = (100.0 - percentile) / 2.0
@@ -604,7 +743,7 @@ class BinnedRedshiftModel(BaseModel):
         if z is None:
             z = self.autoSampling()
         # compute the mean redshift for each fit parameter sample
-        z_means_samples = np.empty((bestfit.n_samples, self.n_models + 1))
+        z_means_samples = np.empty((len(bestfit), self.n_models + 1))
         for i, params in enumerate(bestfit.paramSamples()):
             z_means_samples[i] = self.mean(params, z)
         if symmetric:
@@ -671,3 +810,4 @@ class BinnedRedshiftModel(BaseModel):
             ax.fill_between(
                 binned_z[i], binned_n_z_min[i], binned_n_z_max[i], alpha=0.3,
                 color=line.get_color(), **plot_kwargs)
+        return fig
