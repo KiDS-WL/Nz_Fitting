@@ -21,7 +21,7 @@ class Optimizer(object):
         """
         Degrees of freedom for model fit.
         """
-        return len(self.data) - self.model.n_param
+        return len(self.data) - self.model.getParamNo()
 
     def chisquare(self, bestfit):
         """
@@ -98,9 +98,12 @@ class CurveFit(Optimizer):
             Best fit model parameters.
         """
         if resample:
-            np.random.seed(  # reseed the RNG state for each thread
-                int.from_bytes(os.urandom(4), byteorder="little"))
-            fit_data = self.data.resample()
+            if self.data.reals is not None:
+                fit_data = self.data.resample(reals_idx=args[0])
+            else:
+                np.random.seed(  # reseed the RNG state for each thread
+                    int.from_bytes(os.urandom(4), byteorder="little"))
+                fit_data = self.data.resample()
         else:
             fit_data = self.data
         # get the covariance matrix if possible
@@ -116,8 +119,8 @@ class CurveFit(Optimizer):
 
     def optimize(self, n_samples=1000, threads=None, **kwargs):
         """
-        Computes the best fit parameters and their covariance from
-        resampling and re-fitting the input data errors/covariance.
+        Computes the best fit parameters and their covariance from either
+        data vector realisations or resampling data errors/covariance.
 
         Parameters
         ----------
@@ -125,7 +128,7 @@ class CurveFit(Optimizer):
             Whether the data should be resampled.
         n_samples : int
             Number of resampling steps from data used to estimate the
-            covariance.
+            covariance (no effect if input data have realisations).
         threads : int
             Number of threads used for processing (defaults to all threads).
         **kwargs : keyword arguments
@@ -143,6 +146,8 @@ class CurveFit(Optimizer):
         # resample data points for each fit to estimate parameter covariance
         if threads is None:
             threads = multiprocessing.cpu_count()
+        if self.data.reals is not None:
+            n_samples = self.data.getNoRealisations()
         threads = min(threads, n_samples)
         chunksize = n_samples // threads + 1  # optmizes the workload
         threaded_fit = partial(
@@ -151,5 +156,5 @@ class CurveFit(Optimizer):
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
                 threaded_fit, range(n_samples), chunksize=chunksize)
-        bestfit = FitParameters(pbest, param_samples)
+        bestfit = FitParameters(pbest, param_samples, self.model)
         return bestfit

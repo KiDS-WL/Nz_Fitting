@@ -20,6 +20,7 @@ class RedshiftData(object):
     """
 
     cov = None
+    reals = None
 
     def __init__(self, z, n, dn):
         self.z = np.asarray(z)
@@ -38,7 +39,7 @@ class RedshiftData(object):
         Parameters
         ----------
         cov : array_like
-            covariance matrix.
+            Covariance matrix of shape (N data x N data).
         """
         cov = np.asarray(cov)
         if not cov.shape == (len(self), len(self), ):
@@ -50,6 +51,28 @@ class RedshiftData(object):
                 "variance and diagonal of covariance matrix do not match")
         self.cov = cov
 
+    def setRealisations(self, n_array):
+        """
+        Add an optional data realisations.
+
+        Parameters
+        ----------
+        n_array : array_like
+            Data vector realisations of shape (N realisations x N data).
+        """
+        reals = np.asarray(n_array)
+        if not n_array.shape[1] == len(self):
+            raise ValueError(
+                ("data vector has length %d, but realisations " % len(self)) +
+                "have length %s" % str(n_array.shape[1]))
+        self.reals = reals
+
+    def getNoRealisations(self):
+        if self.reals is None:
+            return 0
+        else:
+            return self.reals.shape[0]
+
     def plotCorr(self):
         """
         Plot the correlation matrix.
@@ -60,9 +83,18 @@ class RedshiftData(object):
         im = plt.matshow(corr, vmin=-1, vmax=1, cmap="bwr")
         plt.colorbar(im)
 
-    def resample(self):
+    def resample(self, reals_idx=None):
         """
-        Resample the data based on the standard error or the covariance matrix.
+        If data vector realisations exist, one of these can be selected,
+        otherwise resample the data based on the standard error or the
+        covariance matrix.
+
+        Parameters
+        ----------
+        reals_idx : int
+            Index of data vector realisation. If None (default), generate a
+            random realisations based on the covariance matrix or standard
+            errors.
 
         Returns
         -------
@@ -70,12 +102,21 @@ class RedshiftData(object):
             Copy of the RedshiftData instance with resampled redshift
             distribution.
         """
-        if self.cov is None:
-            n = np.random.normal(self.n, self.dn)
-            new = self.__class__(self.z, n, self.dn)
-        else:
+        # invalid situation
+        if self.reals is None and reals_idx is not None:
+            raise KeyError("no realisations found to draw from")
+        # get specific realisation
+        elif self.reals is not None and reals_idx is not None:
+            new = self.__class__(self.z, self.reals[reals_idx], self.dn)
+        # draw random realisations
+        elif reals_idx is None and self.cov is not None:
             n = np.random.multivariate_normal(self.n, self.cov)
             new = self.__class__(self.z, n, self.dn)
+        else:
+            n = np.random.normal(self.n, self.dn)
+            new = self.__class__(self.z, n, self.dn)
+        # copy over covariance matrix, but not the realisations
+        if self.cov is not None:
             new.setCovariance(self.cov)
         return new
 
@@ -122,6 +163,11 @@ class BinnedRedshiftData(RedshiftData):
         self.z = np.concatenate([d.z for d in data])
         self.n = np.concatenate([d.n for d in data])
         self.dn = np.concatenate([d.dn for d in data])
+        # check if there are any realisations
+        if any(d.reals is None for d in data):
+            self.reals = None
+        else:
+            self.reals = np.concatenate([d.reals for d in data], axis=1)
 
     def split(self):
         """
@@ -141,9 +187,18 @@ class BinnedRedshiftData(RedshiftData):
             for z, n, dn in zip(binned_z, binned_n, binned_dn)]
         return bins
 
-    def resample(self):
+    def resample(self, reals_idx=None):
         """
-        Resample the data based on the standard error or the covariance matrix.
+        If data vector realisations exist, one of these can be selected,
+        otherwise resample the data based on the standard error or the
+        covariance matrix.
+
+        Parameters
+        ----------
+        reals_idx : int
+            Index of data vector realisation. If None (default), generate a
+            random realisations based on the covariance matrix or standard
+            errors.
 
         Returns
         -------
@@ -151,7 +206,14 @@ class BinnedRedshiftData(RedshiftData):
             Copy of the BinnedRedshiftData instance with resampled redshift
             distribution.
         """
-        if self.cov is None:
+        # invalid situation
+        if self.reals is None and reals_idx is not None:
+            raise KeyError("no realisations found to draw from")
+        # get specific realisation
+        elif self.reals is not None and reals_idx is not None:
+            n = self.reals[reals_idx]
+        # draw random realisations
+        elif reals_idx is None and self.cov is not None:
             n = np.random.normal(self.n, self.dn)
         else:
             n = np.random.multivariate_normal(self.n, self.cov)
@@ -216,13 +278,54 @@ class FitParameters(object):
         List of best-fit model parameters.
     fitsamples : array_like
         Samples of the fit parameters.
+    
     """
 
-    def __init__(self, bestfit, fitsamples):
+    def __init__(self, bestfit, fitsamples, model):
         self._best = np.asarray(bestfit)
         self._samples = np.asarray(fitsamples)
-        self.n_samples, self.n_param = self._samples.shape
-        assert(self.n_param == len(bestfit))
+        self.n_samples = len(self._samples)
+        self._n_param = model.getParamNo()
+        self._param_names = model.getParamNames(label=False)
+        self._param_labels = model.getParamNames(label=True)
+        assert(self._n_param == len(bestfit))
+
+    def __len__(self):
+        return self.n_samples
+
+    def __str__(self):
+        max_width = max(len(n) for n in self.getParamNames())
+        string = ""
+        iterator = zip(
+            self.getParamNames(), self.paramBest(), self.paramError())
+        for name, value, error in iterator:
+            string += "{:>{w}} = {:}\n".format(
+                name, self._format_value_error(value, error, precision=3),
+                w=max_width)
+        return string.strip("\n")
+
+    def __repr__(self):
+        max_width = max(len(n) for n in self.getParamNames())
+        string = "<%s object at %s,\n" % (
+            self.__class__.__name__, hex(id(self)))
+        for line in str(self).split("\n"):
+            string += " %s\n" % line
+        return string.strip("\n") + ">"
+
+    def getParamNo(self):
+        """
+        Number of free model parameters.
+        """
+        return copy(self._n_param)
+
+    def getParamNames(self, label=False):
+        """
+        Names of the free model parameters.
+        """
+        if label:
+            return copy(self._param_labels)
+        else:
+            return copy(self._param_names)
 
     def paramSamples(self):
         """
@@ -260,12 +363,59 @@ class FitParameters(object):
             np.matmul(np.diag(1.0 / errors), covar), np.diag(1.0 / errors))
         return corr
 
+    @staticmethod
+    def _format_value_error(value, error, precision, TEX=False):
+        exponent_value = "{:.{sign}e}".format(value, sign=precision)
+        exponent_error = "{:.{sign}e}".format(error, sign=precision)
+        exponent = max(
+            int(exponent_value.split("e")[1]),
+            int(exponent_error.split("e")[1]))
+        # decide which formatter to use
+        if -3 < exponent < 3:
+            expression = "${: {dig}.{sign}f} {:} {:{dig}.{sign}f}$".format(
+                value, "\pm" if TEX else "±", error,
+                dig=precision + 2, sign=precision)
+            if not TEX:
+                expression = expression.strip("$")
+        else:
+            norm = 10 ** exponent
+            if TEX:
+                expression = "$({:.{sign}f} \pm {:.{sign}f}) ".format(
+                    value / norm, error / norm, sign=precision)
+                expression += "\\times 10^{{{:}}}$".format(exponent)
+            else:
+                expression = "{:.{sign}f}{e:02d} ± {e:.{sign}f}{:02d}".format(
+                    value / norm, error / norm, e=exponent, sign=precision)
+        return expression
+
+    def paramAsTEX(self, param_name, precision=3):
+        """
+        TODO
+        """
+        precision = max(0, precision)
+        if param_name not in self._param_names:
+            raise KeyError("parameter name '%s' does not exist")
+        # get the data values
+        idx = self._param_names.index(param_name)
+        label = self._param_labels[idx]
+        value = self.paramBest()[idx]
+        error = self.paramError()[idx]
+        # format to TEX, decide automatically which formatter to use
+        expression = self._format_value_error(value, error, precision)
+        TEXstring = "${:} = {:}$".format(
+            label.strip("$"), expression.strip("$"))
+        return TEXstring
+
     def plotSamples(self):
         """
         Plot the distribution of the fit parameter samples in a triangle plot
         with corner.corner.
         """
-        return corner(self._samples)
+        fig = corner(
+            self._samples, labels=self.getParamNames(label=True),
+            show_titles=True)
+        fig.tight_layout()
+        return fig
 
     def plotCorr(self):
         """
