@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+from collections import OrderedDict
 from functools import partial
 
 import numpy as np
@@ -17,44 +18,22 @@ class Optimizer(object):
         assert(isinstance(model, BaseModel))
         self.model = model
 
+    def chiSquared(self, pbest):
+        # compute the chi squared
+        diff_data_model = self.model(self.data.z, *pbest) - self.data.n
+        if self.data.cov is None:
+            chisq = np.sum((diff_data_model / self.data.dn)**2)
+        else:
+            cov_inv = np.linalg.inv(self.data.cov)
+            chisq = np.matmul(
+                diff_data_model, np.matmul(cov_inv, diff_data_model))
+        return chisq
+
     def Ndof(self):
         """
         Degrees of freedom for model fit.
         """
         return len(self.data) - self.model.getParamNo()
-
-    def chisquare(self, bestfit):
-        """
-        Compute the chi^2 for a set of best-fit parameters.
-
-        Parameters
-        ----------
-        bestfit : FitParameters
-            Best-fit parameters used to evaluate the model.
-
-        Returns
-        -------
-        chisq : float
-        """
-        model_n = self.model(self.data.z, *bestfit.paramBest())
-        chisq = np.sum(((model_n - self.data.n) / self.data.dn)**2)
-        return chisq
-
-    def chisquareReduced(self, bestfit):
-        """
-        Compute the reduced chi^2 for a set of best-fit parameters.
-
-        Parameters
-        ----------
-        bestfit : FitParameters
-            Best-fit parameters used to evaluate the model.
-
-        Returns
-        -------
-        chisq_red : float
-        """
-        chisq_red = self.chisquare(bestfit) / self.Ndof()
-        return chisq_red
 
     def optimize(self, **kwargs):
         raise NotImplementedError
@@ -115,7 +94,6 @@ class CurveFit(Optimizer):
         not_finite = ~np.isfinite(fit_data.n)
         if np.any(not_finite):
             fit_data.n[not_finite] = self.data.n[not_finite]
-            print(args, np.count_nonzero(not_finite))
         # run the optimizer
         popt, _ = curve_fit(
             self.model, fit_data.z, fit_data.n, sigma=sigma,
@@ -144,10 +122,14 @@ class CurveFit(Optimizer):
         bestfit : FitParameters
             Parameter best-fit container.
         """
+        label_dict = OrderedDict(zip(
+            self.model.getParamNames(label=False),
+            self.model.getParamNames(label=True)))
         guess = self.model.guess()
         bounds = self.model.bounds()
         # get the best fit parameters
         pbest = self._curve_fit_wrapper()
+        pbest_dict = OrderedDict(zip(label_dict.keys(), pbest))
         # resample data points for each fit to estimate parameter covariance
         if threads is None:
             threads = multiprocessing.cpu_count()
@@ -161,5 +143,10 @@ class CurveFit(Optimizer):
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
                 threaded_fit, range(n_samples), chunksize=chunksize)
-        bestfit = FitParameters(pbest, param_samples, self.model)
+        param_samples_dict = OrderedDict(
+            zip(label_dict.keys(), np.transpose(param_samples)))
+        # collect the best fit data
+        bestfit = FitParameters(
+            pbest_dict, param_samples_dict, label_dict,
+            self.Ndof(), self.chiSquared(pbest))
         return bestfit

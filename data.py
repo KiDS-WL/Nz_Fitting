@@ -1,6 +1,8 @@
+from collections import OrderedDict
 from copy import copy
 
 import numpy as np
+import pandas as pd
 from corner import corner
 from matplotlib import pyplot as plt
 from scipy.integrate import cumtrapz
@@ -196,17 +198,17 @@ class RedshiftDataBinned(RedshiftData):
         assert(isinstance(master, RedshiftData))
         # all input samples must have the same redshift sampling
         assert(all(np.all(d.z == master.z) for d in bins))
-        data = [*bins, master]
-        self.n_data = len(data)
+        self.data = [*bins, master]
+        self.n_data = len(self.data)
         # assemble all data points into a vector
-        self.z = np.concatenate([d.z for d in data])
-        self.n = np.concatenate([d.n for d in data])
-        self.dn = np.concatenate([d.dn for d in data])
+        self.z = np.concatenate([d.z for d in self.data])
+        self.n = np.concatenate([d.n for d in self.data])
+        self.dn = np.concatenate([d.dn for d in self.data])
         # check if there are any realisations
-        if any(d.reals is None for d in data):
+        if any(d.reals is None for d in self.data):
             self.reals = None
         else:
-            self.reals = np.concatenate([d.reals for d in data], axis=1)
+            self.reals = np.concatenate([d.reals for d in self.data], axis=1)
 
     def split(self):
         """
@@ -313,28 +315,38 @@ class FitParameters(object):
 
     Parameters
     ----------
-    bestfit : array_like
-        List of best-fit model parameters.
-    fitsamples : array_like
-        Samples of the fit parameters.
-    
+    bestfit : OrderedDict
+        Dictionary of with mapping parameter name -> best-fit model parameter.
+    fitsamples : OrderedDict
+        Dictionary of with mapping parameter name -> fit parameter samples.
+    labels : OrderedDict
+        Dictionary of with mapping parameter name -> math text / TEX label.
+    n_dof : int
+        Degrees of freedom of model fit.
+    chisquare : float
+        Chi squared of model best fit.
     """
 
-    def __init__(self, bestfit, fitsamples, model):
-        self._best = np.asarray(bestfit)
-        self._samples = np.asarray(fitsamples)
-        self.n_samples = len(self._samples)
-        self._n_param = model.getParamNo()
-        self._param_names = model.getParamNames(label=False)
-        self._param_labels = model.getParamNames(label=True)
-        assert(self._n_param == len(bestfit))
+    def __init__(self, bestfit, fitsamples, labels, n_dof, chisquare):
+        assert(type(bestfit) is OrderedDict)
+        self._best = bestfit
+        assert(type(fitsamples) is OrderedDict)
+        self._samples = fitsamples
+        self._n_samples = len(self._samples.values().__iter__().__next__())
+        assert(type(labels) is OrderedDict)
+        self.names = labels
+        self._ndof = n_dof
+        self._chisquare = chisquare
 
     def __len__(self):
-        return self.n_samples
+        return self._n_samples
 
     def __str__(self):
         max_width = max(len(n) for n in self.getParamNames())
-        string = ""
+        chi_str = "χ² dof."
+        max_width = max(max_width, len(chi_str))
+        string = "{:>{w}} = {:.3f}\n".format(
+            chi_str, self.chiSquareReduced(), w=max_width)
         iterator = zip(
             self.getParamNames(), self.paramBest(), self.paramError())
         for name, value, error in iterator:
@@ -355,42 +367,50 @@ class FitParameters(object):
         """
         Number of free model parameters.
         """
-        return copy(self._n_param)
+        return len(self._best)
 
     def getParamNames(self, label=False):
         """
         Names of the free model parameters.
         """
         if label:
-            return copy(self._param_labels)
+            return self.names.values()
         else:
-            return copy(self._param_names)
+            return self.names.keys()
 
-    def paramSamples(self):
+    def paramSamples(self, name=None):
         """
         Directly get the fit parameter samples.
         """
-        return self._samples.copy()
+        if name is None:
+            return np.transpose(list(self._samples.values()))
+        else:
+            return self._samples[name]
 
-    def paramBest(self):
+    def paramBest(self, name=None):
         """
         Get the best fit parameters.
         """
-        return self._best.copy()
-
-    def paramError(self):
-        """
-        Get the best fit parameter errors.
-        """
-        variance = np.diag(self.paramCovar())
-        return np.sqrt(variance)
+        if name is None:
+            return np.asarray(list(self._best.values()))
+        else:
+            return self._best[name]
 
     def paramCovar(self):
         """
         Get the best fit parameter covariance matrix.
         """
-        cov = np.cov(self._samples, rowvar=False)
+        cov = np.cov(self.paramSamples(), rowvar=False)
         return np.atleast_2d(cov)
+
+    def paramError(self, name=None):
+        """
+        Get the best fit parameter errors.
+        """
+        if name is None:
+            return np.std(self.paramSamples(), axis=0)
+        else:
+            return np.std(self.paramSamples(name))
 
     def paramCorr(self):
         """
@@ -401,6 +421,15 @@ class FitParameters(object):
         corr = np.matmul(
             np.matmul(np.diag(1.0 / errors), covar), np.diag(1.0 / errors))
         return corr
+
+    def Ndof(self):
+        return self._ndof
+
+    def chiSquare(self):
+        return self._chisquare
+    
+    def chiSquareReduced(self):
+        return self.chiSquare() / self.Ndof()
 
     @staticmethod
     def _format_value_error(value, error, precision, TEX=False):
@@ -432,28 +461,31 @@ class FitParameters(object):
         TODO
         """
         precision = max(0, precision)
-        if param_name not in self._param_names:
-            raise KeyError("parameter name '%s' does not exist")
-        # get the data values
-        idx = self._param_names.index(param_name)
-        label = self._param_labels[idx]
-        value = self.paramBest()[idx]
-        error = self.paramError()[idx]
+        if param_name not in self.names:
+            raise KeyError("parameter with name '%s' does not exist")
         # format to TEX, decide automatically which formatter to use
-        expression = self._format_value_error(value, error, precision)
+        expression = self._format_value_error(
+            self.paramBest(param_name), self.paramError(param_name), precision)
         TEXstring = "${:} = {:}$".format(
-            label.strip("$"), expression.strip("$"))
+            self.names[param_name].strip("$"), expression.strip("$"))
         return TEXstring
 
-    def plotSamples(self):
+    def plotSamples(self, names=None):
         """
         Plot the distribution of the fit parameter samples in a triangle plot
         with corner.corner.
         """
-        fig = corner(
-            self._samples, labels=self.getParamNames(label=True),
-            show_titles=True)
-        fig.tight_layout()
+        if names is None:
+            samples = self.paramSamples()
+            labels = list(self.names.values())
+        else:
+            samples = []
+            labels = []
+            for name in names:
+                samples.append(self.paramSamples(name))
+                labels.append(self.names[name])
+            samples = np.transpose(samples)
+        fig = corner(samples, labels=labels, show_titles=True)
         return fig
 
     def plotCorr(self):
