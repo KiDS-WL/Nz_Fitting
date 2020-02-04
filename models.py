@@ -1,12 +1,12 @@
 from copy import copy
+from math import pi, sqrt
 
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.special import erfinv
+from scipy.interpolate import interp1d
 
-from .data import RedshiftData, FitParameters
-
-sqrt_two_pi = np.sqrt(2.0 * np.pi)
+from .data import RedshiftHistogram, RedshiftData, FitParameters
 
 
 def gaussian(x, mu, sigma):
@@ -27,7 +27,7 @@ def gaussian(x, mu, sigma):
     pos_sphere : array_like
         Normal distribution sampled at x.
     """
-    prefactor = np.full_like(x, 1.0 / (sqrt_two_pi * sigma))
+    prefactor = np.full_like(x, 1.0 / (sqrt(2.0  *pi) * sigma))
     exponent = -0.5 * ((x - mu) / sigma)**2
     return prefactor * np.exp(exponent)
 
@@ -40,7 +40,7 @@ class BaseModel(object):
         """
         raise NotImplementedError
 
-    def getParamNames(self):
+    def getParamNames(self, label=False):
         """
         Names of the free model parameters.
         """
@@ -511,13 +511,322 @@ class LogGaussianComb(CombModel):
         return n_z
 
 
-class BinnedRedshiftModel(BaseModel):
+class ShiftModel(BaseModel):
+
+    def __init__(self, histogram, data_binning):
+        self._data_binning = np.asarray(data_binning)
+        assert(isinstance(histogram, RedshiftHistogram))
+        self._hist = histogram
+        # compute the probability density
+        self._cdf = interp1d(
+            self._hist.z, self._hist.cdf, fill_value="extrapolate")
+
+    def getParamNo(self):
+        """
+        Number of free model parameters.
+        """
+        return 2
+
+    def getParamNames(self, label=False):
+        """
+        Names of the free model parameters.
+        """
+        if label:
+            return (r"$\delta z$", r"$A$")
+        else:
+            return ("dz", "A")
+
+    def guess(self):
+        """
+        Parameter guess for the amplitudes in the format required by
+        scipy.optmize.curve_fit.
+        """
+        return np.array([0.0, 1.0])
+
+    def bounds(self):
+        """
+        Parameter bounds for the amplitudes in the format required by
+        scipy.optmize.curve_fit.
+        """
+        return (np.array([-0.5, 0.0]), np.array([0.5, np.inf]))
+
+    def __call__(self, z, *params):
+        shifted_bins = self._data_binning + params[0]
+        P_edges = self._cdf(shifted_bins)
+        pdf_shifted = np.diff(P_edges) / np.diff(shifted_bins)
+        # renormalize
+        norm = np.trapz(pdf_shifted, x=z)
+        return pdf_shifted / norm * params[1]
+
+
+class ShiftModelBinned(BaseModel):
+
+    def __init__(self, shiftmodels, bias=None):
+        assert(all(type(m) is ShiftModel for m in shiftmodels))
+        self._models = [m for m in shiftmodels]
+        self.n_models = len(shiftmodels)
+        self.n_param_models = [m.getParamNo() for m in shiftmodels]
+        if bias is not None:
+            assert(isinstance(bias, BaseModel))
+        self._bias = bias
+
+    def getParamNo(self):
+        n_param = sum(m.getParamNo() for m in self._models)
+        if self._bias is not None:
+            n_param += self._bias.getParamNo()
+        return n_param
+
+    def getParamNames(self, label=False):
+        names = []
+        if label:
+            for i, model in enumerate(self._models, 1):
+                names.extend(
+                    pn[:-1] + "_{%d}$" % i
+                    for pn in model.getParamNames(label))
+        else:
+            for i, model in enumerate(self._models, 1):
+                names.extend(
+                    pn + "_%d" % i for pn in model.getParamNames())
+        if self._bias is not None:
+            names.extend(self._bias.getParamNames(label))
+        return tuple(names)
+
+    def guess(self):
+        # concatenate the guesses from the bin models
+        guess = [m.guess() for m in self._models]
+        if self._bias is not None:
+            guess.append(self._bias.guess())
+        return np.concatenate(guess)
+
+    def bounds(self):
+        # concatenate the bounds from the bin models
+        lower_bound = [m.bounds()[0] for m in self._models]
+        upper_bound = [m.bounds()[1] for m in self._models]
+        if self._bias is not None:
+            lower_bound.append(self._bias.bounds()[0])
+            upper_bound.append(self._bias.bounds()[1])
+        return (np.concatenate(lower_bound), np.concatenate(upper_bound))
+
+    def __call__(self, z, *params):
+        """
+        TODO
+
+        Parameters
+        ----------
+        z : array_like
+            Points at with the model is evaluated. These must be a
+            concatenation of the sampling points of all bins and the master
+            sample.
+        *params : float
+            Concatenation of the set of logarithmic component amplitudes for
+            the bins.
+
+        Returns
+        -------
+        n_z : array_like
+            Model evaluated for each bin and the master sample concatenated to
+            a single data vector.
+        """
+        # split parameters, last array is empty or holds bias model params
+        param_tuples = np.split(params, np.cumsum(self.n_param_models))
+        # split the redshifts assuming there is the same number per sample
+        bin_z = np.split(z, self.n_models)
+        # evaluate each model
+        bin_n_z = []
+        for i in range(self.n_models):
+            n_z = self._models[i](bin_z[i], *param_tuples[i])
+            if self._bias is not None:  # multiply with bias to mach data
+                bias_params = param_tuples[-1]
+                n_z *= self._bias(bin_z[i], *bias_params)
+            bin_n_z.append(n_z)
+        n_z = np.concatenate(bin_n_z)
+        return n_z
+
+    def modelBest(self, bestfit, z):
+        """
+        Evaluate the fit model with the best fit parameters, splitting the
+        data by bins/master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+
+        Returns
+        -------
+        z : list of array_like
+            List of sampling points for each bin and the master sample.
+        n_z : list of array_like
+            List of model values for each bin and the master sample.
+        """
+        try:
+            n_z = self(np.concatenate(z), *bestfit.paramBest())
+        except AttributeError:
+            n_z = self(np.concatenate(z), *bestfit)
+        n_z = np.split(n_z, self.n_models)
+        return z, n_z
+
+    def modelError(self, bestfit, z, percentile=68.3):
+        """
+        Determine the fit upper and lower constraint given a percentile,
+        splitting the data by bins/master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+        percentile : float
+            Percentile to use for the model constraint, must be between 0.0
+            and 100.0.
+
+        Returns
+        -------
+        z : list of array_like
+            List of sampling points for each bin and the master sample.
+        n_z_min : list of array_like
+            List of model lower constraints for each bin and the master sample.
+        n_z_max : list of array_like
+            List of model upper constraints for each bin and the master sample.
+        """
+        n_z_samples = np.empty((len(bestfit), len(z), len(z[0])))
+        for i, params in enumerate(bestfit.paramSamples()):
+            _, n_z_samples[i] = self.modelBest(params, z)
+        p = (100.0 - percentile) / 2.0
+        n_z_min, n_z_max = np.percentile(
+            n_z_samples, [p, 100.0 - p], axis=0)
+        return z, [n for n in n_z_min], [n for n in n_z_max]
+
+    def mean(self, bestfit):
+        """
+        Determine the mean of the redshfit model for given best fit parameters
+        for each bin and the master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters or array_like
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+
+        Returns
+        -------
+        z_mean : array_like
+            List of mean of redshift model by bin/master sample.
+        """
+        binned_z, binned_n_z = self.modelBest(bestfit, z)
+        z_means = np.array([
+            np.average(bz, weights=bn_z)
+            for bz, bn_z in zip(binned_z, binned_n_z)])
+        return z_means
+
+    def meanError(self, bestfit, percentile=68.3, symmetric=True):
+        """
+        Determine the uncertainty on the mean of the redshfit model for given
+        best fit parameters for each bin and the master sample. Returns the
+        standard errors by default.
+
+        Parameters
+        ----------
+        bestfit : FitParameters
+            Best-fit parameters used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+        percentile : float
+            Percentile to use for the model constraint, must be between 0.0
+            and 100.0.
+        symmetric : bool
+            Whether the upper and lower constraints should be symmetric.
+
+        Returns
+        -------
+        z_means_err : array_like
+            List of pairs of lower and upper constraints on the undertainty of
+            the means of the redshift model by bin/master sample.
+        """
+        # compute the mean redshift for each fit parameter sample
+        z_means_samples = np.empty((len(bestfit), self.n_models))
+        for i, params in enumerate(bestfit.paramSamples()):
+            z_means_samples[i] = self.mean(params, z)
+        if symmetric:
+            z_means_err = z_means_samples.std(axis=0)
+            # scale sigma to match the requested percentile
+            nsigma = np.sqrt(2.0) * erfinv(percentile / 100.0)
+            z_means_err *= nsigma
+            z_means_err = np.transpose([-z_means_err, z_means_err])
+        else:
+            p = (100.0 - percentile) / 2.0
+            z_means_min, z_means_max = np.percentile(
+                z_means_samples, [p, 100.0 - p], axis=0)
+            z_means = self.mean(bestfit, z)
+            z_means_err = np.transpose([
+                z_means_min - z_means, z_means_max - z_means])
+        return z_means_err
+
+    def plot(self, bestfit, z, fig=None, **kwargs):
+        """
+        Plot the model and its uncertainty based on a set of best fit
+        parameters. Tomographic bins are arranged in a grid of separate plots
+        followed by the (full) master sample.
+
+        Parameters
+        ----------
+        bestfit : FitParameters
+            Best-fit parameter used to evaluate the model.
+        z : list of array_like
+            A list of sampling points, split by bin/master sample at with the
+            model is sampled.
+        fig : matplotlib.figure
+            Plot on an existig figure which must have at least n_data axes.
+        **kwargs : keyword arguments
+            Arugments parsed on to matplotlib.pyplot.plot and fill_between
+
+        Returns
+        -------
+        fig : matplotlib.figure
+            The figure containting the plots.
+        """
+        if fig is None:
+            n_data = self.n_models
+            # try to arrange the subplots in a grid
+            n_x = int(np.ceil(n_data / np.sqrt(n_data)))
+            n_y = int(np.ceil(n_data / n_x))
+            fig, axes = plt.subplots(
+                n_y, n_x, figsize=(3 * n_x, 3 * n_y), sharex=True, sharey=True)
+        else:
+            axes = np.asarray(fig.axes)
+        plot_kwargs = {}
+        plot_kwargs.update(kwargs)
+        # compute the plot values
+        binned_z, binned_n_z = self.modelBest(bestfit, z)
+        binned_z, binned_n_z_min, binned_n_z_max = self.modelError(bestfit, z)
+        for i, ax in enumerate(axes.flatten()):
+            line = ax.plot(binned_z[i], binned_n_z[i], **plot_kwargs)[0]
+            # add a shaded area that indicates the 68% model confidence
+            try:
+                plot_kwargs.pop("color")
+            except KeyError:
+                pass
+            ax.fill_between(
+                binned_z[i], binned_n_z_min[i], binned_n_z_max[i], alpha=0.3,
+                color=line.get_color(), **plot_kwargs)
+        return fig
+
+
+class CombModelBinned(BaseModel):
     """
     TODO: MISSING!
     """
 
     def __init__(self, bins, weights, bias=None):
-        assert(all(isinstance(m, BaseModel) for m in bins))
+        assert(all(issubclass(m, CombModel) for m in bins))
         assert(len(weights) == len(bins))
         self._models = [m for m in bins]
         self.weights = np.asarray(weights) / sum(weights)
@@ -545,7 +854,7 @@ class BinnedRedshiftModel(BaseModel):
                     ["A_%d,%d" % (i + 1, j + 1)
                     for j in range(model.getParamNo())])
         if self._bias is not None:
-            names.append(self._bias.getParamNames(label))
+            names.extend(self._bias.getParamNames(label))
         return tuple(names)
 
     def guess(self):
