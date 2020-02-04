@@ -111,6 +111,11 @@ class CurveFit(Optimizer):
             sigma = fit_data.cov
         else:
             sigma = fit_data.dn
+        # replace NaNs
+        not_finite = ~np.isfinite(fit_data.n)
+        if np.any(not_finite):
+            fit_data.n[not_finite] = self.data.n[not_finite]
+            print(args, np.count_nonzero(not_finite))
         # run the optimizer
         popt, _ = curve_fit(
             self.model, fit_data.z, fit_data.n, sigma=sigma,
