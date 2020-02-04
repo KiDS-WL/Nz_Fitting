@@ -3,6 +3,45 @@ from copy import copy
 import numpy as np
 from corner import corner
 from matplotlib import pyplot as plt
+from scipy.integrate import cumtrapz
+
+
+class RedshiftHistogram(object):
+
+    def __init__(self, bin_centers, counts):
+        self.z = np.asarray(bin_centers)
+        assert(len(self) == len(counts))
+        # store the normalized counts
+        self.pdf = np.asarray(counts) / np.trapz(counts, x=self.z)
+        self.cdf = cumtrapz(self.pdf, x=self.z, initial=0.0)
+
+    def __len__(self):
+        return len(self.z)
+
+    def plot(self, ax=None, **kwargs):
+        """
+        Create an error bar plot the data histogram.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes
+            Specifies the axis to plot on.
+        **kwargs : keyword arguments
+            Arugments parsed on to matplotlib.pyplot.step
+        """
+        if ax is None:
+            ax = plt.gca()
+        y = np.append(self.pdf[0], self.pdf)
+        fill_kwargs = {}
+        if "color" not in kwargs:
+            kwargs["color"] = "0.6"
+        if "label" in kwargs:
+            fill_kwargs["label"] = kwargs.pop("label")
+        fill = ax.fill_between(
+            self.z, 0.0, y,
+            step="pre", alpha=0.3, **fill_kwargs)
+        lines = ax.step(self.z, y, **kwargs)
+        fill.set_color(lines[0].get_color())
 
 
 class RedshiftData(object):
@@ -138,7 +177,7 @@ class RedshiftData(object):
         ax.errorbar(self.z, self.n, yerr=self.dn, **plot_kwargs)
 
 
-class BinnedRedshiftData(RedshiftData):
+class RedshiftDataBinned(RedshiftData):
     """
     Container a joint tomographic bin fitting. The weighted sum of the bins
     is fitted against the full sample (master) and this container bundles all
@@ -384,7 +423,7 @@ class FitParameters(object):
                     value / norm, error / norm, sign=precision)
                 expression += "\\times 10^{{{:}}}$".format(exponent)
             else:
-                expression = "{:.{sign}f}{e:02d} ± {e:.{sign}f}{:02d}".format(
+                expression = "({: .{sign}f} ± {:.{sign}f}) x 1e{e:d}".format(
                     value / norm, error / norm, e=exponent, sign=precision)
         return expression
 
