@@ -21,12 +21,12 @@ class Optimizer(object):
     def chiSquared(self, pbest):
         # compute the chi squared
         diff_data_model = self.model(self.data.z, *pbest) - self.data.n
-        if self.data.cov is None:
-            chisq = np.sum((diff_data_model / self.data.dn)**2)
-        else:
-            cov_inv = np.linalg.inv(self.data.cov)
+        try:
             chisq = np.matmul(
-                diff_data_model, np.matmul(cov_inv, diff_data_model))
+                diff_data_model,
+                np.matmul(self.model.getInverseCovariance(), diff_data_model))
+        except AttributeError:
+            chisq = np.sum((diff_data_model / self.data.dn)**2)
         return chisq
 
     def Ndof(self):
@@ -86,9 +86,9 @@ class CurveFit(Optimizer):
         else:
             fit_data = self.data
         # get the covariance matrix if possible
-        if fit_data.cov is not None:
-            sigma = fit_data.cov
-        else:
+        try:
+            sigma = fit_data.getCovariance()
+        except AttributeError:
             sigma = fit_data.dn
         # replace NaNs
         not_finite = ~np.isfinite(fit_data.n)
