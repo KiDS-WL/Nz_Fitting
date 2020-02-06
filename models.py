@@ -7,6 +7,7 @@ from scipy.special import erfinv
 from scipy.interpolate import interp1d
 
 from .data import RedshiftHistogram, RedshiftData, FitParameters
+from .plotting import Figure
 
 
 def gaussian(x, mu, sigma):
@@ -210,7 +211,10 @@ class BaseModel(object):
             Parameter best-fit container.
         """
         if ax is None:
+            fig = Figure(1)
             ax = plt.gca()
+        else:
+            fig = plt.gcf()
         plot_kwargs = {}
         plot_kwargs.update(kwargs)
         line = ax.plot(*self.modelBest(bestfit, z), **plot_kwargs)[0]
@@ -222,6 +226,7 @@ class BaseModel(object):
         ax.fill_between(
             *self.modelError(bestfit, z), alpha=0.3,
             color=line.get_color(), **plot_kwargs)
+        return fig
 
 
 class PowerLawBias(BaseModel):
@@ -236,7 +241,7 @@ class PowerLawBias(BaseModel):
         if label:
             return tuple([r"$\alpha$"])
         else:
-            return tuple(["α"])
+            return tuple(["alpha"])
 
     def guess(self):
         return np.zeros(self.getParamNo())
@@ -329,7 +334,7 @@ class BiasFitModel(BaseModel):
         return nz_full_model
 
     def plot(self, bestfit, ax=None, **kwargs):
-        super().plot(bestfit, self.full.z, ax, **kwargs)
+        return super().plot(bestfit, self.full.z, ax, **kwargs)
 
 
 class CombModel(BaseModel):
@@ -405,7 +410,7 @@ class CombModel(BaseModel):
     def plot(self, bestfit, z=None, ax=None, **kwargs):
         if z is None:
             z = self.autoSampling()
-        super().plot(bestfit, z, ax, **kwargs)
+        return super().plot(bestfit, z, ax, **kwargs)
 
 
 class GaussianComb(CombModel):
@@ -794,12 +799,8 @@ class ShiftModelBinned(BaseModel):
             The figure containting the plots.
         """
         if fig is None:
-            n_data = self.n_models
-            # try to arrange the subplots in a grid
-            n_x = int(np.ceil(n_data / np.sqrt(n_data)))
-            n_y = int(np.ceil(n_data / n_x))
-            fig, axes = plt.subplots(
-                n_y, n_x, figsize=(3 * n_x, 3 * n_y), sharex=True, sharey=True)
+            fig = Figure(self.n_data)
+            axes = np.asarray(fig.axes)
         else:
             axes = np.asarray(fig.axes)
         plot_kwargs = {}
@@ -826,7 +827,7 @@ class CombModelBinned(BaseModel):
     """
 
     def __init__(self, bins, weights, bias=None):
-        assert(all(issubclass(m, CombModel) for m in bins))
+        assert(all(isinstance(m, CombModel) for m in bins))
         assert(len(weights) == len(bins))
         self._models = [m for m in bins]
         self.weights = np.asarray(weights) / sum(weights)
@@ -1094,12 +1095,8 @@ class CombModelBinned(BaseModel):
             The figure containting the plots.
         """
         if fig is None:
-            n_data = self.n_models + 1
-            # try to arrange the subplots in a grid
-            n_x = int(np.ceil(n_data / np.sqrt(n_data)))
-            n_y = int(np.ceil(n_data / n_x))
-            fig, axes = plt.subplots(
-                n_y, n_x, figsize=(3 * n_x, 3 * n_y), sharex=True, sharey=True)
+            fig = Figure(self.n_data)
+            axes = np.asarray(fig.axes)
         else:
             axes = np.asarray(fig.axes)
         if z is None:
