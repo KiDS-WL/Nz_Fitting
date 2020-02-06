@@ -556,7 +556,15 @@ class ShiftModel(BaseModel):
         return (np.array([-0.5, 0.0]), np.array([0.5, np.inf]))
 
     def __call__(self, z, *params):
-        shifted_bins = self._data_binning + params[0]
+        # If the input redshift sampling doesn't match the one store interally,
+        # reconstruct it approximately based on z. This is necessary to get a
+        # correct shift fit, but at he same time being able to plot at an
+        # arbitrary redshift resolution.
+        if len(z) + 1 != len(self._data_binning):
+            shifted_bins = np.append(
+                0.0, np.append((z[1:] + z[:-1]) / 2.0, z.max() + 0.1))
+        else:
+            shifted_bins = self._data_binning + params[0]
         P_edges = self._cdf(shifted_bins)
         pdf_shifted = np.diff(P_edges) / np.diff(shifted_bins)
         # renormalize
