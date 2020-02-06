@@ -472,7 +472,7 @@ class FitParameters(object):
                 dig=precision + 2, sign=precision)
             if not TEX:
                 expression = expression.strip("$")
-        elif notation in :
+        else:
             norm = 10 ** exponent
             if TEX:
                 expression = "$({:.{sign}f} \pm {:.{sign}f}) ".format(
