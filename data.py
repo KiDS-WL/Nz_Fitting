@@ -7,6 +7,8 @@ from corner import corner
 from matplotlib import pyplot as plt
 from scipy.integrate import cumtrapz
 
+from .plotting import Figure
+
 
 class RedshiftHistogram(object):
 
@@ -32,7 +34,10 @@ class RedshiftHistogram(object):
             Arugments parsed on to matplotlib.pyplot.step
         """
         if ax is None:
+            fig = Figure(1)
             ax = plt.gca()
+        else:
+            fig = plt.gcf()
         y = np.append(self.pdf[0], self.pdf)
         fill_kwargs = {}
         if "color" not in kwargs:
@@ -44,6 +49,7 @@ class RedshiftHistogram(object):
             step="pre", alpha=0.3, **fill_kwargs)
         lines = ax.step(self.z, y, **kwargs)
         fill.set_color(lines[0].get_color())
+        return fig
 
 
 class RedshiftData(object):
@@ -63,7 +69,7 @@ class RedshiftData(object):
     cov = None
     reals = None
 
-    def __init__(self, z, n, dn):
+    def __init__(self, z, n, dn=None):
         self.z = np.asarray(z)
         assert(len(self) == len(n))
         assert(len(self) == len(dn))
@@ -91,6 +97,19 @@ class RedshiftData(object):
             raise ValueError(
                 "variance and diagonal of covariance matrix do not match")
         self.cov = cov
+        self.cov_inv = np.linalg.inv(self.cov)
+
+    def getCovariance(self):
+        if self.cov is None:
+            raise AttributeError("covariance matrix not set")
+        else:
+            return self.cov
+
+    def getInvserseCovariance(self):
+        if self.cov_inv is None:
+            raise AttributeError("covariance matrix not set")
+        else:
+            return self.cov_inv
 
     def setRealisations(self, n_array):
         """
@@ -107,6 +126,13 @@ class RedshiftData(object):
                 ("data vector has length %d, but realisations " % len(self)) +
                 "have length %s" % str(n_array.shape[1]))
         self.reals = reals
+
+    def getRealisations(self):
+        if self.reals is None:
+            raise AttributeError("realisations not set")
+        else:
+            return self.reals
+
 
     def getNoRealisations(self):
         if self.reals is None:
@@ -161,7 +187,7 @@ class RedshiftData(object):
             new.setCovariance(self.cov)
         return new
 
-    def plot(self, ax=None, **kwargs):
+    def plot(self, ax=None, z_offset=0.0, **kwargs):
         """
         Create an error bar plot the data sample.
 
@@ -173,10 +199,14 @@ class RedshiftData(object):
             Arugments parsed on to matplotlib.pyplot.errorbar
         """
         if ax is None:
+            fig = Figure(1)
             ax = plt.gca()
+        else:
+            fig = plt.gcf()
         plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
         plot_kwargs.update(kwargs)
-        ax.errorbar(self.z, self.n, yerr=self.dn, **plot_kwargs)
+        ax.errorbar(self.z + z_offset, self.n, yerr=self.dn, **plot_kwargs)
+        return fig
 
 
 class RedshiftDataBinned(RedshiftData):
@@ -272,7 +302,7 @@ class RedshiftDataBinned(RedshiftData):
             new.setCovariance(self.cov)
         return new
 
-    def plot(self, fig=None, **kwargs):
+    def plot(self, fig=None, z_offset=0.0, **kwargs):
         """
         Create an error bar plot the data sample. Tomographic bins are arranged
         in a grid of separate plots followed by the (full) master sample.
@@ -291,20 +321,13 @@ class RedshiftDataBinned(RedshiftData):
         """
         bins = self.split()
         if fig is None:
-            # try to arrange the subplots in a grid
-            n_x = int(np.ceil(self.n_data / np.sqrt(self.n_data)))
-            n_y = int(np.ceil(self.n_data / n_x))
-            fig, axes = plt.subplots(
-                n_y, n_x, figsize=(4 * n_x, 4 * n_y), sharex=True, sharey=True)
+            fig = Figure(self.n_data)
+            axes = np.asarray(fig.axes)
         else:
             axes = np.asarray(fig.axes)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            try:
-                bins[i].plot(ax=ax, **kwargs)
-            except IndexError:
-                fig.delaxes(axes.flatten()[i])
-        fig.tight_layout()
+            bins[i].plot(ax=ax, z_offset=z_offset, **kwargs)
         return fig
 
 
@@ -349,7 +372,10 @@ class FitParameters(object):
             chi_str, self.chiSquareReduced(), w=max_width)
         iterator = zip(
             self.getParamNames(), self.paramBest(), self.paramError())
-        for name, value, error in iterator:
+        for i, (name, value, error) in enumerate(iterator):
+            if i > 12:
+                string += (" " * max_width) + "...     \n"
+                break
             string += "{:>{w}} = {:}\n".format(
                 name, self._format_value_error(value, error, precision=3),
                 w=max_width)
@@ -432,20 +458,21 @@ class FitParameters(object):
         return self.chiSquare() / self.Ndof()
 
     @staticmethod
-    def _format_value_error(value, error, precision, TEX=False):
+    def _format_value_error(
+            value, error, precision, TEX=False, notation="auto"):
         exponent_value = "{:.{sign}e}".format(value, sign=precision)
         exponent_error = "{:.{sign}e}".format(error, sign=precision)
         exponent = max(
             int(exponent_value.split("e")[1]),
             int(exponent_error.split("e")[1]))
         # decide which formatter to use
-        if -3 < exponent < 3:
+        if notation == "decimal" or (-3 < exponent < 3 and notation != "exp"):
             expression = "${: {dig}.{sign}f} {:} {:{dig}.{sign}f}$".format(
                 value, "\pm" if TEX else "±", error,
                 dig=precision + 2, sign=precision)
             if not TEX:
                 expression = expression.strip("$")
-        else:
+        elif notation in :
             norm = 10 ** exponent
             if TEX:
                 expression = "$({:.{sign}f} \pm {:.{sign}f}) ".format(
@@ -456,7 +483,7 @@ class FitParameters(object):
                     value / norm, error / norm, e=exponent, sign=precision)
         return expression
 
-    def paramAsTEX(self, param_name, precision=3):
+    def paramAsTEX(self, param_name, precision=3, notation="auto"):
         """
         TODO
         """
@@ -465,7 +492,8 @@ class FitParameters(object):
             raise KeyError("parameter with name '%s' does not exist")
         # format to TEX, decide automatically which formatter to use
         expression = self._format_value_error(
-            self.paramBest(param_name), self.paramError(param_name), precision)
+            self.paramBest(param_name), self.paramError(param_name),
+            precision, TEX=True, notation=notation)
         TEXstring = "${:} = {:}$".format(
             self.names[param_name].strip("$"), expression.strip("$"))
         return TEXstring
