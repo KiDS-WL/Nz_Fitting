@@ -62,6 +62,8 @@ class Figure:
             kwargs["color"] = "k"
         if "alpha" not in kwargs:
             kwargs["alpha"] = 0.1
+        if "zorder" not in kwargs:
+            kwargs["zorder"] = -1
         for ax, limits in zip(self.axes, limit_tuples):
             ax.axvspan(*limits, **kwargs)
 
