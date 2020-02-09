@@ -459,7 +459,8 @@ class FitParameters(object):
 
     @staticmethod
     def _format_value_error(
-            value, error, precision, TEX=False, notation="auto"):
+            value, error, precision, TEX=False, notation="auto",
+            use_siunitx=False):
         exponent_value = "{:.{sign}e}".format(value, sign=precision)
         exponent_error = "{:.{sign}e}".format(error, sign=precision)
         exponent = max(
@@ -467,23 +468,40 @@ class FitParameters(object):
             int(exponent_error.split("e")[1]))
         # decide which formatter to use
         if notation == "decimal" or (-3 < exponent < 3 and notation != "exp"):
-            expression = "${: {dig}.{sign}f} {:} {:{dig}.{sign}f}$".format(
-                value, "\pm" if TEX else "±", error,
-                dig=precision + 2, sign=precision)
-            if not TEX:
-                expression = expression.strip("$")
+            if TEX:
+                if use_siunitx:
+                    expression = " \\num{{{: {dig}.{sgn}f} \\pm ".format(
+                        value, dig=precision + 2, sgn=precision)
+                    expression += "{:{dig}.{sgn}f}}}".format(
+                        error, dig=precision + 2, sgn=precision)
+                else:
+                    expression = "$ {: {dig}.{sgn}f} \\pm ".format(
+                        value, dig=precision + 2, sgn=precision)
+                    expression += "{:{dig}.{sgn}f}$".format(
+                        error, dig=precision + 2, sgn=precision)
+            else:
+                expression = " {: {dig}.{sgn}f} ± {:{dig}.{sgn}f}".format(
+                    value, error, dig=precision + 2, sgn=precision)
         else:
             norm = 10 ** exponent
             if TEX:
-                expression = "$({:.{sign}f} \pm {:.{sign}f}) ".format(
-                    value / norm, error / norm, sign=precision)
-                expression += "\\times 10^{{{:}}}$".format(exponent)
+                if use_siunitx:
+                    expression = "\\num{{{: {dig}.{sgn}f} \\pm ".format(
+                        value / norm, dig=precision + 2, sgn=precision)
+                    expression += "{:{dig}.{sgn}f}d{e:d}}}".format(
+                        error / norm, dig=precision + 2, sgn=precision,
+                        e=exponent)
+                else:
+                    expression = "$({:.{sgn}f} \\pm {:.{sgn}f}) ".format(
+                        value / norm, error / norm, sgn=precision)
+                    expression += "\\times 10^{{{:}}}$".format(exponent)
             else:
-                expression = "({: .{sign}f} ± {:.{sign}f}) x 1e{e:d}".format(
-                    value / norm, error / norm, e=exponent, sign=precision)
+                expression = "({: .{sgn}f} ± {:.{sgn}f}) x 1e{e:d}".format(
+                    value / norm, error / norm, e=exponent, sgn=precision)
         return expression
 
-    def paramAsTEX(self, param_name, precision=3, notation="auto"):
+    def paramAsTEX(
+            self, param_name, precision=3, notation="auto", use_siunitx=False):
         """
         TODO
         """
@@ -493,7 +511,7 @@ class FitParameters(object):
         # format to TEX, decide automatically which formatter to use
         expression = self._format_value_error(
             self.paramBest(param_name), self.paramError(param_name),
-            precision, TEX=True, notation=notation)
+            precision, TEX=True, notation=notation, use_siunitx=use_siunitx)
         TEXstring = "${:} = {:}$".format(
             self.names[param_name].strip("$"), expression.strip("$"))
         return TEXstring
