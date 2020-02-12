@@ -31,12 +31,12 @@ class Figure:
         for ax in self.axes:
             ax.margins(x=x, y=y)
 
-    def set_xlabel(self, text, fontsize=14):
+    def set_xlabel(self, text, fontsize=12):
         for i, ax in enumerate(self.axes):
             if i // self.shape[0] == self.shape[1] - 1:
                 ax.set_xlabel(text, fontsize=fontsize)
 
-    def set_ylabel(self, text, fontsize=14):
+    def set_ylabel(self, text, fontsize=12):
         for i, ax in enumerate(self.axes):
             if i % self.shape[0] == 0:
                 ax.set_ylabel(text, fontsize=fontsize)
@@ -49,13 +49,13 @@ class Figure:
         for ax in self.axes:
             ax.set_ylim(bottom, top)
 
-    def annotate(self, text_list, loc, xycoords="axes fraction", size=None):
+    def annotate(self, text_list, loc, xycoords="axes fraction", size=12):
         if type(text_list) is str:
             text_list = [text_list] * len(self.axes)
         for ax, text in zip(self.axes, text_list):
             ax.annotate(
                 text, loc, xycoords=xycoords,
-                va="center", ha="center", size=None)
+                va="center", ha="center", size=size)
 
     def vspans(self, limit_tuples, **kwargs):
         if "color" not in kwargs:
@@ -67,10 +67,15 @@ class Figure:
         for ax, limits in zip(self.axes, limit_tuples):
             ax.axvspan(*limits, **kwargs)
 
+    def legend(self, handles, labels, fontsize=12):
+        legend = self.fig.legend(
+            handles, labels, loc="upper center", fontsize=12,
+            ncol=len(handles), frameon=False)
+        return legend
+
     def __getattr__(self, attr):
         if hasattr(self.fig, attr):
             return getattr(self.fig, attr)
-
         else:
             raise AttributeError(
                 "%s has not attribute '%s'" % (self.fig, attr))
