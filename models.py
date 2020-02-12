@@ -7,7 +7,7 @@ from scipy.special import erfinv
 from scipy.interpolate import interp1d
 
 from .data import RedshiftHistogram, RedshiftData, FitParameters
-from .plotting import Figure
+from .utils import Figure
 
 
 def gaussian(x, mu, sigma):

@@ -7,7 +7,7 @@ from corner import corner
 from matplotlib import pyplot as plt
 from scipy.integrate import cumtrapz
 
-from .plotting import Figure
+from .utils import format_variable, Figure
 
 
 class RedshiftHistogram(object):
@@ -93,9 +93,12 @@ class RedshiftData(object):
             raise ValueError(
                 ("data vector has length %d, but covariance " % len(self)) +
                 "matrix has shape %s" % str(cov.shape))
-        if not np.isclose(np.diag(cov), self.dn**2).all():
-            raise ValueError(
-                "variance and diagonal of covariance matrix do not match")
+        var = self.dn**2
+        if not np.isclose(np.diag(cov), var).all():
+            string = "variance:    %s\n" % str(var)
+            string += "cov. diag.: %s\n" % str(np.diag(cov))
+            string += "variance and diagonal of covariance matrix do not match"
+            raise ValueError(string)
         self.cov = cov
         self.cov_inv = np.linalg.inv(self.cov)
 
@@ -377,7 +380,7 @@ class FitParameters(object):
                 string += (" " * max_width) + "...     \n"
                 break
             string += "{:>{w}} = {:}\n".format(
-                name, self._format_value_error(value, error, precision=3),
+                name, format_variable(value, error, precision=3),
                 w=max_width)
         return string.strip("\n")
 
@@ -457,49 +460,6 @@ class FitParameters(object):
     def chiSquareReduced(self):
         return self.chiSquare() / self.Ndof()
 
-    @staticmethod
-    def _format_value_error(
-            value, error, precision, TEX=False, notation="auto",
-            use_siunitx=False):
-        exponent_value = "{:.{sign}e}".format(value, sign=precision)
-        exponent_error = "{:.{sign}e}".format(error, sign=precision)
-        exponent = max(
-            int(exponent_value.split("e")[1]),
-            int(exponent_error.split("e")[1]))
-        # decide which formatter to use
-        if notation == "decimal" or (-3 < exponent < 3 and notation != "exp"):
-            if TEX:
-                if use_siunitx:
-                    expression = " \\num{{{: {dig}.{sgn}f} \\pm ".format(
-                        value, dig=precision + 2, sgn=precision)
-                    expression += "{:{dig}.{sgn}f}}}".format(
-                        error, dig=precision + 2, sgn=precision)
-                else:
-                    expression = "$ {: {dig}.{sgn}f} \\pm ".format(
-                        value, dig=precision + 2, sgn=precision)
-                    expression += "{:{dig}.{sgn}f}$".format(
-                        error, dig=precision + 2, sgn=precision)
-            else:
-                expression = " {: {dig}.{sgn}f} ± {:{dig}.{sgn}f}".format(
-                    value, error, dig=precision + 2, sgn=precision)
-        else:
-            norm = 10 ** exponent
-            if TEX:
-                if use_siunitx:
-                    expression = "\\num{{{: {dig}.{sgn}f} \\pm ".format(
-                        value / norm, dig=precision + 2, sgn=precision)
-                    expression += "{:{dig}.{sgn}f}d{e:d}}}".format(
-                        error / norm, dig=precision + 2, sgn=precision,
-                        e=exponent)
-                else:
-                    expression = "$({:.{sgn}f} \\pm {:.{sgn}f}) ".format(
-                        value / norm, error / norm, sgn=precision)
-                    expression += "\\times 10^{{{:}}}$".format(exponent)
-            else:
-                expression = "({: .{sgn}f} ± {:.{sgn}f}) x 1e{e:d}".format(
-                    value / norm, error / norm, e=exponent, sgn=precision)
-        return expression
-
     def paramAsTEX(
             self, param_name, precision=3, notation="auto", use_siunitx=False):
         """
@@ -509,7 +469,7 @@ class FitParameters(object):
         if param_name not in self.names:
             raise KeyError("parameter with name '%s' does not exist")
         # format to TEX, decide automatically which formatter to use
-        expression = self._format_value_error(
+        expression = format_variable(
             self.paramBest(param_name), self.paramError(param_name),
             precision, TEX=True, notation=notation, use_siunitx=use_siunitx)
         TEXstring = "${:} = {:}$".format(
