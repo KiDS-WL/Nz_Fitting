@@ -6,6 +6,7 @@ import pandas as pd
 from corner import corner
 from matplotlib import pyplot as plt
 from scipy.integrate import cumtrapz
+from scipy.interpolate import interp1d
 
 from .utils import format_variable, Figure
 
@@ -143,6 +144,41 @@ class RedshiftData(object):
         else:
             return self.reals.shape[0]
 
+    def mean(self):
+        mask = np.isfinite(self.n)
+        z, n = self.z[mask], self.n[mask]
+        norm = np.trapz(n, x=z)
+        return np.trapz(z * n / norm, x=z)
+
+    def meanError(self, n_samples=1000):
+        means = []
+        if self.reals is None:
+            for i in range(n_samples):
+                means.append(self.resample().mean())
+        else:
+            for i in range(len(self.reals)):
+                means.append(self.resample(i).mean())
+        return np.std(means, axis=0)
+
+    def median(self):
+        mask = np.isfinite(self.n)
+        z, n = self.z[mask], self.n[mask]
+        cdf = cumtrapz(n, x=z, initial=0.0)
+        cdf /= cdf[-1]  # normalize
+        # median: z where cdf(z) == 0.5
+        cdf_inverse = interp1d(cdf, self.z)  # returns redshift
+        return np.float64(cdf_inverse(0.5))  # median
+
+    def medianError(self, n_samples=1000):
+        medians = []
+        if self.reals is None:
+            for i in range(n_samples):
+                medians.append(self.resample().median())
+        else:
+            for i in range(len(self.reals)):
+                medians.append(self.resample(i).median())
+        return np.std(medians, axis=0)
+
     def plotCorr(self):
         """
         Plot the correlation matrix.
@@ -174,7 +210,7 @@ class RedshiftData(object):
         """
         # invalid situation
         if self.reals is None and reals_idx is not None:
-            raise KeyError("no realisations found to draw from")
+            raise ValueError("no realisations found to draw from")
         # get specific realisation
         elif self.reals is not None and reals_idx is not None:
             new = self.__class__(self.z, self.reals[reals_idx], self.dn)
@@ -261,6 +297,12 @@ class RedshiftDataBinned(RedshiftData):
             for z, n, dn in zip(binned_z, binned_n, binned_dn)]
         return bins
 
+    def mean(self):
+        return np.array([d.mean() for d in self.data])
+
+    def median(self):
+        return np.array([d.median() for d in self.data])
+
     def resample(self, reals_idx=None):
         """
         If data vector realisations exist, one of these can be selected,
@@ -287,7 +329,7 @@ class RedshiftDataBinned(RedshiftData):
         elif self.reals is not None and reals_idx is not None:
             n = self.reals[reals_idx]
         # draw random realisations
-        elif reals_idx is None and self.cov is not None:
+        elif reals_idx is None and self.cov is None:
             n = np.random.normal(self.n, self.dn)
         else:
             n = np.random.multivariate_normal(self.n, self.cov)
