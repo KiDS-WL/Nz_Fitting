@@ -563,6 +563,7 @@ class ShiftModel(BaseModel):
         if len(z) + 1 != len(self._data_binning):
             shifted_bins = np.append(
                 0.0, np.append((z[1:] + z[:-1]) / 2.0, z.max() + 0.1))
+            shifted_bins += params[0]
         else:
             shifted_bins = self._data_binning + params[0]
         P_edges = self._cdf(shifted_bins)
