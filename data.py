@@ -71,16 +71,17 @@ class RedshiftData(object):
     reals = None
 
     def __init__(self, z, n, dn=None):
-        self.z = np.asarray(z)
+        self.z = np.array(z, copy=True)
         assert(len(self) == len(n))
         assert(len(self) == len(dn))
-        self.n = np.asarray(n)
-        self.dn = np.asarray(dn)
+        self.n = np.array(n, copy=True)
+        self.dn = np.array(dn, copy=True)
+        self.dn[np.isnan(self.dn)] = np.inf
 
     def __len__(self):
         return len(self.z)
 
-    def setCovariance(self, cov):
+    def setCovariance(self, cov, check=True):
         """
         Add an optional data covariance matrix.
 
@@ -90,18 +91,19 @@ class RedshiftData(object):
             Covariance matrix of shape (N data x N data).
         """
         cov = np.asarray(cov)
-        if not cov.shape == (len(self), len(self), ):
-            raise ValueError(
-                ("data vector has length %d, but covariance " % len(self)) +
-                "matrix has shape %s" % str(cov.shape))
-        var = self.dn**2
-        if not np.isclose(np.diag(cov), var).all():
-            string = "variance:    %s\n" % str(var)
-            string += "cov. diag.: %s\n" % str(np.diag(cov))
-            string += "variance and diagonal of covariance matrix do not match"
-            raise ValueError(string)
+        if check:
+            if not cov.shape == (len(self), len(self), ):
+                raise ValueError(
+                    ("data vector has length %d, but " % len(self)) +
+                    "covariance matrix has shape %s" % str(cov.shape))
+            var = self.dn**2
+            if not np.isclose(np.diag(cov), var).all():
+                string = "variance and diagonal of covariance matrix "
+                string += "do not match:\n"
+                string += "variance:   %s\n" % str(var)
+                string += "cov. diag.: %s\n" % str(np.diag(cov))
+                raise ValueError(string)
         self.cov = cov
-        self.cov_inv = np.linalg.inv(self.cov)
 
     def getCovariance(self):
         if self.cov is None:
@@ -111,9 +113,8 @@ class RedshiftData(object):
 
     def getInvserseCovariance(self):
         if self.cov_inv is None:
-            raise AttributeError("covariance matrix not set")
-        else:
-            return self.cov_inv
+            self.cov_inv = np.linalg.inv(self.getCovariance())
+        return self.cov_inv
 
     def setRealisations(self, n_array):
         """
@@ -144,9 +145,10 @@ class RedshiftData(object):
         else:
             return self.reals.shape[0]
 
-    def mean(self):
-        mask = np.isfinite(self.n)
-        z, n = self.z[mask], self.n[mask]
+    def mean(self, n=None):
+        n = self.n if n is None else n
+        mask = np.isfinite(n)
+        z, n = self.z[mask], n[mask]
         norm = np.trapz(n, x=z)
         return np.trapz(z * n / norm, x=z)
 
@@ -160,13 +162,14 @@ class RedshiftData(object):
                 means.append(self.resample(i).mean())
         return np.std(means, axis=0)
 
-    def median(self):
-        mask = np.isfinite(self.n)
-        z, n = self.z[mask], self.n[mask]
+    def median(self, n=None):
+        n = self.n if n is None else n
+        mask = np.isfinite(n)
+        z, n = self.z[mask], n[mask]
         cdf = cumtrapz(n, x=z, initial=0.0)
         cdf /= cdf[-1]  # normalize
         # median: z where cdf(z) == 0.5
-        cdf_inverse = interp1d(cdf, self.z)  # returns redshift
+        cdf_inverse = interp1d(cdf, z)  # returns redshift
         return np.float64(cdf_inverse(0.5))  # median
 
     def medianError(self, n_samples=1000):
@@ -223,7 +226,7 @@ class RedshiftData(object):
             new = self.__class__(self.z, n, self.dn)
         # copy over covariance matrix, but not the realisations
         if self.cov is not None:
-            new.setCovariance(self.cov)
+            new.setCovariance(self.cov, check=False)
         return new
 
     def plot(self, ax=None, z_offset=0.0, **kwargs):
