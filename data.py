@@ -145,10 +145,9 @@ class RedshiftData(object):
         else:
             return self.reals.shape[0]
 
-    def mean(self, n=None):
-        n = self.n if n is None else n
-        mask = np.isfinite(n)
-        z, n = self.z[mask], n[mask]
+    def mean(self):
+        mask = np.isfinite(self.n)
+        z, n = self.z[mask], self.n[mask]
         norm = np.trapz(n, x=z)
         return np.trapz(z * n / norm, x=z)
 
@@ -162,10 +161,9 @@ class RedshiftData(object):
                 means.append(self.resample(i).mean())
         return np.std(means, axis=0)
 
-    def median(self, n=None):
-        n = self.n if n is None else n
-        mask = np.isfinite(n)
-        z, n = self.z[mask], n[mask]
+    def median(self):
+        mask = np.isfinite(self.n)
+        z, n = self.z[mask], self.n[mask]
         cdf = cumtrapz(n, x=z, initial=0.0)
         cdf /= cdf[-1]  # normalize
         # median: z where cdf(z) == 0.5
