@@ -2,6 +2,7 @@ from collections import OrderedDict
 from copy import copy
 
 import numpy as np
+import numpy.ma as ma
 import pandas as pd
 from corner import corner
 from matplotlib import pyplot as plt
@@ -54,198 +55,230 @@ class RedshiftHistogram(object):
 
 
 class RedshiftData(object):
-    """
-    Container for redshift distribution data with uncertainties.
 
-    Parameters
-    ----------
-    z : array_like
-        Sampling points of the redshift distribution.
-    n : array_like
-        Redshift distribution.
-    dn : array_like
-        Redshift distribution standard error.
-    """
-
-    cov = None
-    reals = None
-
-    def __init__(self, z, n, dn=None):
-        self.z = np.array(z, copy=True)
-        assert(len(self) == len(n))
-        assert(len(self) == len(dn))
-        self.n = np.array(n, copy=True)
-        self.dn = np.array(dn, copy=True)
-        self.dn[np.isnan(self.dn)] = np.inf
-
-    def __len__(self):
-        return len(self.z)
-
-    def setCovariance(self, cov, check=True):
-        """
-        Add an optional data covariance matrix.
-
-        Parameters
-        ----------
-        cov : array_like
-            Covariance matrix of shape (N data x N data).
-        """
-        cov = np.asarray(cov)
-        if check:
-            if not cov.shape == (len(self), len(self), ):
-                raise ValueError(
-                    ("data vector has length %d, but " % len(self)) +
-                    "covariance matrix has shape %s" % str(cov.shape))
-            var = self.dn**2
-            if not np.isclose(np.diag(cov), var).all():
-                string = "variance and diagonal of covariance matrix "
-                string += "do not match:\n"
-                string += "variance:   %s\n" % str(var)
-                string += "cov. diag.: %s\n" % str(np.diag(cov))
-                raise ValueError(string)
-        self.cov = cov
-
-    def getCovariance(self):
-        if self.cov is None:
-            raise AttributeError("covariance matrix not set")
+    def __init__(self, z, n, dn=None, weight=1.0):
+        self.weight = float(weight)
+        self._z = ma.masked_invalid(z)
+        self._n = ma.masked_invalid(n)
+        if dn is None:  # create a dummmy array
+            self._dn = ma.array(np.ones_like(self._z))
         else:
-            return self.cov
-
-    def getInvserseCovariance(self):
-        if self.cov_inv is None:
-            self.cov_inv = np.linalg.inv(self.getCovariance())
-        return self.cov_inv
-
-    def setRealisations(self, n_array):
-        """
-        Add an optional data realisations.
-
-        Parameters
-        ----------
-        n_array : array_like
-            Data vector realisations of shape (N realisations x N data).
-        """
-        reals = np.asarray(n_array)
-        if not n_array.shape[1] == len(self):
+            self._dn = ma.masked_invalid(dn)
+        if not (self._z.shape == self._n.shape == self._dn.shape):
             raise ValueError(
-                ("data vector has length %d, but realisations " % len(self)) +
-                "have length %s" % str(n_array.shape[1]))
-        self.reals = reals
+                "length of z ({:d}), ".format(len(z)) +
+                "n ({:d}) and ".format(len(n)) +
+                "dn ({:d}}) do not match".format(len(dn)))
+        # synchronize the individual masks
+        self._update_masks()
 
-    def getRealisations(self):
-        if self.reals is None:
-            raise AttributeError("realisations not set")
+    def _update_masks(self):
+        mask = self._z.mask | self._n.mask | self._dn.mask
+        if mask.all():
+            raise ValueError("data has only invalid values")
+        for attr in ("_z", "_n", "_dn"):  # update each mask
+            getattr(self, attr).mask = mask
+
+    @staticmethod
+    def read(path):
+        NotImplemented
+
+    def write(self, path):
+        NotImplemented
+
+    def mask(self):
+        return self._z.mask
+
+    def len(self, all=False, **kwargs):
+        return len(self._z) if all else ma.count(self._z)
+ 
+    def z(self, all=False, **kwargs):
+        return self._z.data if all else self._z.compressed()
+
+    def n(self, all=False, **kwargs):
+        return self._n.data if all else self._n.compressed()
+
+    def dn(self, all=False, **kwargs):
+        return self._dn.data if all else self._dn.compressed()
+
+    def setErrors(self, errors):
+        errors = ma.masked_invalid(errors)
+        n_data = self.len(all=True)
+        if errors.shape != (n_data,):
+            raise ValueError(
+                "expected errors of shape ({:d},), ".format(n_data) + 
+                "but got shape {:s}".format(str(errors.shape)))
+        self._dn = errors
+        # synchronize the individual masks
+        self._update_masks()
+
+    def setSamples(self, samples):
+        samples = ma.masked_invalid(samples)
+        n_data = self.len(all=True)
+        # check whether data and sample dimensions match
+        try:
+            assert(samples.shape[1] == n_data)
+        except (IndexError, AssertionError):
+            raise ValueError(
+                "expected samples of shape (N, {:d}), ".format(n_data) + 
+                "but got shape {:s}".format(str(samples.shape)))
+        # check that no realisations are completely masked
+        if np.any(samples.mask.sum(axis=1) == n_data):
+            raise ValueError("a sample contains no valid values")
+        self._samples = samples
+        # replace the existing error bars
+        self.setErrors(samples.std(axis=0))
+        # set the covariance matrix
+        covmat = ma.cov(self._samples, ddof=0, rowvar=False)
+        self.setCovMat(covmat)
+
+    def hasSamples(self, require=False):
+        has_samples = hasattr(self, "_samples")
+        if require and not has_samples:
+            raise AttributeError("data samples not set")
+        return has_samples
+
+    def getSamples(self, all=False):
+        self.hasSamples(require=True)
+        if all:
+            samples = self._samples.data
         else:
-            return self.reals
+            samples = []
+            for sample in self._samples:
+                samples.append(sample.compressed())
+        return samples
 
+    def setCovMat(self, covmat):
+        covmat = ma.masked_invalid(covmat)
+        # check whether data and covariance dimensions match
+        n_data = self.len(all=True)
+        if covmat.shape != (n_data, n_data):
+            raise ValueError(
+                "expected covariance matrix of shape " +
+                "({n:d}, {n:d}), ".format(n=n_data) + 
+                "but got shape {:s}".format(covmat.shape))
+        # do some basic checks with the diagonal
+        diag = np.diag(covmat)
+        if not np.all(diag.mask == self.mask()):
+            raise ValueError(
+                "the mask of data and covariance matrix diagonal do not match")
+        if not np.isclose(diag.compressed(), self.dn()**2).all():
+            raise ValueError(
+                "the variance and the covariance matrix diagonal do not match")
+        self._covmat = covmat
 
-    def getNoRealisations(self):
-        if self.reals is None:
-            return 0
+    def hasCovMat(self, require=False):
+        has_covmat = hasattr(self, "_covmat")
+        if require and not has_covmat:
+            raise AttributeError("covariance matrix not set")
+        return has_covmat
+
+    def getCovMat(self, all=False):
+        self.hasCovMat(require=True)
+        if all:
+            covmat = self._covmat.filled(np.nan)
         else:
-            return self.reals.shape[0]
+            n_good = self.len()
+            covmat = self._covmat.compressed().reshape((n_good, n_good))
+        return covmat
 
-    def mean(self):
-        mask = np.isfinite(self.n)
-        z, n = self.z[mask], self.n[mask]
-        norm = np.trapz(n, x=z)
-        return np.trapz(z * n / norm, x=z)
-
-    def meanError(self, n_samples=1000):
-        means = []
-        if self.reals is None:
-            for i in range(n_samples):
-                means.append(self.resample().mean())
+    def getCovMatInv(self, all=False):
+        if not hasattr(self, "_covmat_inv"):
+            # compute the inverse of the covariance matrix with good columns
+            covmat_good = self.getCovMat(all=False)
+            invmat_good = np.linalg.inv(covmat_good)
+            # get the bad columns and merge them with the inverse matrix
+            invmat = self._covmat.copy()
+            invmat[invmat != ma.masked] = invmat_good.flatten()
+            self._invmat = invmat
+        if all:
+            invmat = self._invmat.filled(np.nan)
         else:
-            for i in range(len(self.reals)):
-                means.append(self.resample(i).mean())
-        return np.std(means, axis=0)
+            n_good = self.len()
+            invmat = self._invmat.compressed().reshape((n_good, n_good))
+        return invmat
 
-    def median(self):
-        mask = np.isfinite(self.n)
-        z, n = self.z[mask], self.n[mask]
-        cdf = cumtrapz(n, x=z, initial=0.0)
-        cdf /= cdf[-1]  # normalize
-        # median: z where cdf(z) == 0.5
-        cdf_inverse = interp1d(cdf, z)  # returns redshift
-        return np.float64(cdf_inverse(0.5))  # median
-
-    def medianError(self, n_samples=1000):
-        medians = []
-        if self.reals is None:
-            for i in range(n_samples):
-                medians.append(self.resample().median())
+    def samplingMethod(self):
+        if self.hasSamples():
+            return "samples"
+        elif self.hasCovMat():
+            return "covmat"
         else:
-            for i in range(len(self.reals)):
-                medians.append(self.resample(i).median())
-        return np.std(medians, axis=0)
+            return "stderr"
 
-    def plotCorr(self):
-        """
-        Plot the correlation matrix.
-        """
-        corr = np.matmul(
-            np.matmul(np.diag(1.0 / self.dn), self.cov),
-            np.diag(1.0 / self.dn))
-        im = plt.matshow(corr, vmin=-1, vmax=1, cmap="bwr")
-        plt.colorbar(im)
-
-    def resample(self, reals_idx=None):
-        """
-        If data vector realisations exist, one of these can be selected,
-        otherwise resample the data based on the standard error or the
-        covariance matrix.
-
-        Parameters
-        ----------
-        reals_idx : int
-            Index of data vector realisation. If None (default), generate a
-            random realisations based on the covariance matrix or standard
-            errors.
-
-        Returns
-        -------
-        new : RedshiftData
-            Copy of the RedshiftData instance with resampled redshift
-            distribution.
-        """
-        # invalid situation
-        if self.reals is None and reals_idx is not None:
-            raise ValueError("no realisations found to draw from")
-        # get specific realisation
-        elif self.reals is not None and reals_idx is not None:
-            new = self.__class__(self.z, self.reals[reals_idx], self.dn)
-        # draw random realisations
-        elif reals_idx is None and self.cov is not None:
-            n = np.random.multivariate_normal(self.n, self.cov)
-            new = self.__class__(self.z, n, self.dn)
+    def getSample(self, idx=None):
+        method = self.samplingMethod()
+        if method == "samples" and idx is not None:
+            n_samples = self._samples.shape[0]
+            if idx >= n_samples:
+                raise IndexError(
+                    "requested sample index {:d} is out of range {:d}".format(
+                        idx, n_samples))
+            sample = self._samples[idx]
         else:
-            n = np.random.normal(self.n, self.dn)
-            new = self.__class__(self.z, n, self.dn)
-        # copy over covariance matrix, but not the realisations
-        if self.cov is not None:
-            new.setCovariance(self.cov, check=False)
+            sample = self._n.copy()
+            if method == "covmat":
+                sample[sample != ma.masked] = np.random.multivariate_normal(
+                    self.n(all=False), self.getCovMat(all=False))
+            else:
+                sample[sample != ma.masked] = np.random.normal(
+                    self.n(all=False), self.dn(all=False))
+        new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
         return new
 
-    def plot(self, ax=None, z_offset=0.0, **kwargs):
-        """
-        Create an error bar plot the data sample.
+    def iterSamples(self, limit=1000):
+        if self.hasSamples():
+            limit = self._samples.shape[0]
+        for idx in range(limit):
+            yield self.getSample(idx)
 
-        Parameters
-        ----------
-        ax : matplotlib.axes
-            Specifies the axis to plot on.
-        **kwargs : keyword arguments
-            Arugments parsed on to matplotlib.pyplot.errorbar
-        """
+    def norm(self):
+        return np.trapz(self.n(), x=self.z())
+
+    def mean(self):
+        z = self.z()
+        return np.trapz(z * self.n() / self.norm(), x=z)
+
+    def mean(self, error=False):
+        z = self.z()
+        mean = np.trapz(z * self.n() / self.norm(), x=z)
+        if error:
+            # compute the error
+            means = [
+                sample.mean(error=False) for sample in self.iterSamples()]
+            return mean, np.std(means)
+        else:
+            return mean
+
+    def median(self, error=False):
+        z = self.z()
+        cdf = cumtrapz(self.n(), x=z, initial=0.0)
+        cdf /= cdf[-1]  # normalize
+        # median: z where cdf(z) == 0.5
+        median = np.interp(0.5, cdf, z)  # returns redshift
+        if error:
+            # compute the error
+            medians = [
+                sample.median(error=False) for sample in self.iterSamples()]
+            return median, np.std(medians)
+        else:
+            return median
+
+    def plot(self, ax=None, z_offset=0.0, mark_bad=False, **kwargs):
         if ax is None:
             fig = Figure(1)
-            ax = plt.gca()
+            ax = fig.axes[0]
         else:
             fig = plt.gcf()
         plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
         plot_kwargs.update(kwargs)
-        ax.errorbar(self.z + z_offset, self.n, yerr=self.dn, **plot_kwargs)
+        if mark_bad:
+            z_bad = self._z[self.mask()].data
+            ax.plot(
+                z_bad, np.zeros_like(z_bad),
+                color=plot_kwargs["color"], marker="|", ls="none")
+        ax.errorbar(
+            self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
         return fig
 
 
