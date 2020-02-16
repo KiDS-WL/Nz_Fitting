@@ -72,12 +72,20 @@ class RedshiftData(object):
         # synchronize the individual masks
         self._update_masks()
 
-    def _update_masks(self):
+    def _update_masks(self, extra_mask=None):
+        # check which values are unmasked in all data elements
         mask = self._z.mask | self._n.mask | self._dn.mask
+        if self.hasCovMat():
+            mask |= np.diag(self._covmat.mask)
         if mask.all():
             raise ValueError("data has only invalid values")
-        for attr in ("_z", "_n", "_dn"):  # update each mask
+        # update each data vector mask
+        for attr in ("_z", "_n", "_dn"):
             getattr(self, attr).mask = mask
+        # apply to covariance matrix
+        if self.hasCovMat():
+            self._covmat.mask[mask] = True
+            self._covmat.mask[:, mask] = True
 
     @staticmethod
     def read(path):
@@ -86,20 +94,20 @@ class RedshiftData(object):
     def write(self, path):
         NotImplemented
 
-    def mask(self):
+    def mask(self, **kwargs):
         return self._z.mask
 
     def len(self, all=False, **kwargs):
         return len(self._z) if all else ma.count(self._z)
  
     def z(self, all=False, **kwargs):
-        return self._z.data if all else self._z.compressed()
+        return self._z.filled(np.nan) if all else self._z.compressed()
 
     def n(self, all=False, **kwargs):
-        return self._n.data if all else self._n.compressed()
+        return self._n.filled(np.nan) if all else self._n.compressed()
 
     def dn(self, all=False, **kwargs):
-        return self._dn.data if all else self._dn.compressed()
+        return self._dn.filled(np.nan) if all else self._dn.compressed()
 
     def setErrors(self, errors):
         errors = ma.masked_invalid(errors)
@@ -138,7 +146,7 @@ class RedshiftData(object):
             raise AttributeError("data samples not set")
         return has_samples
 
-    def getSamples(self, all=False):
+    def getSamples(self, all=False, **kwargs):
         self.hasSamples(require=True)
         if all:
             samples = self._samples.data
@@ -147,6 +155,10 @@ class RedshiftData(object):
             for sample in self._samples:
                 samples.append(sample.compressed())
         return samples
+
+    def getSampleNo(self):
+        self.hasSamples(require=True)
+        return len(self._samples)
 
     def setCovMat(self, covmat):
         covmat = ma.masked_invalid(covmat)
@@ -158,14 +170,13 @@ class RedshiftData(object):
                 "({n:d}, {n:d}), ".format(n=n_data) + 
                 "but got shape {:s}".format(covmat.shape))
         # do some basic checks with the diagonal
-        diag = np.diag(covmat)
-        if not np.all(diag.mask == self.mask()):
-            raise ValueError(
-                "the mask of data and covariance matrix diagonal do not match")
-        if not np.isclose(diag.compressed(), self.dn()**2).all():
+        self._covmat = covmat
+        self._update_masks()
+        variance = self.dn()**2
+        cov_diag = np.diag(self._covmat).compressed()
+        if not np.isclose(cov_diag, variance).all():
             raise ValueError(
                 "the variance and the covariance matrix diagonal do not match")
-        self._covmat = covmat
 
     def hasCovMat(self, require=False):
         has_covmat = hasattr(self, "_covmat")
@@ -173,7 +184,7 @@ class RedshiftData(object):
             raise AttributeError("covariance matrix not set")
         return has_covmat
 
-    def getCovMat(self, all=False):
+    def getCovMat(self, all=False, **kwargs):
         self.hasCovMat(require=True)
         if all:
             covmat = self._covmat.filled(np.nan)
@@ -182,7 +193,7 @@ class RedshiftData(object):
             covmat = self._covmat.compressed().reshape((n_good, n_good))
         return covmat
 
-    def getCovMatInv(self, all=False):
+    def getCovMatInv(self, all=False, **kwargs):
         if not hasattr(self, "_covmat_inv"):
             # compute the inverse of the covariance matrix with good columns
             covmat_good = self.getCovMat(all=False)
@@ -206,10 +217,17 @@ class RedshiftData(object):
         else:
             return "stderr"
 
-    def getSample(self, idx=None):
-        method = self.samplingMethod()
+    def _parse_method(self, method):
+        if method is None:
+            method = self.samplingMethod()
+        elif method not in ("samples", "covmat", "stderr"):
+            raise ValueError("invalid method name '{:}'".format(method))
+        return method
+
+    def getSample(self, idx=None, method=None):
+        method = self._parse_method(method)
         if method == "samples" and idx is not None:
-            n_samples = self._samples.shape[0]
+            n_samples = self.getSampleNo()
             if idx >= n_samples:
                 raise IndexError(
                     "requested sample index {:d} is out of range {:d}".format(
@@ -224,43 +242,48 @@ class RedshiftData(object):
                 sample[sample != ma.masked] = np.random.normal(
                     self.n(all=False), self.dn(all=False))
         new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
+        new.setCovMat(self.getCovMat(all=True))
         return new
 
-    def iterSamples(self, limit=1000):
-        if self.hasSamples():
-            limit = self._samples.shape[0]
+    def iterSamples(self, limit=1000, method=None):
+        method = self._parse_method(method)
+        if self.hasSamples() and method == "samples":
+            limit = self.getSampleNo()
         for idx in range(limit):
             yield self.getSample(idx)
 
     def norm(self):
-        return np.trapz(self.n(), x=self.z())
-
-    def mean(self):
-        z = self.z()
-        return np.trapz(z * self.n() / self.norm(), x=z)
+        norm = np.trapz(self.n(), x=self.z())
+        return norm if norm >= 0.0 else np.nan
 
     def mean(self, error=False):
         z = self.z()
         mean = np.trapz(z * self.n() / self.norm(), x=z)
         if error:
-            # compute the error
-            means = [
-                sample.mean(error=False) for sample in self.iterSamples()]
-            return mean, np.std(means)
+            # compute the error from realisations
+            means = np.fromiter(
+                (sample.mean(error=False) for sample in self.iterSamples()),
+                dtype=np.dtype(mean))
+            return mean, np.nanstd(means)
         else:
             return mean
 
     def median(self, error=False):
         z = self.z()
         cdf = cumtrapz(self.n(), x=z, initial=0.0)
-        cdf /= cdf[-1]  # normalize
+        if cdf[-1] < 0.0:
+            norm = np.nan
+        else:
+            norm = cdf[-1]
+        cdf /= norm
         # median: z where cdf(z) == 0.5
         median = np.interp(0.5, cdf, z)  # returns redshift
         if error:
-            # compute the error
-            medians = [
-                sample.median(error=False) for sample in self.iterSamples()]
-            return median, np.std(medians)
+            # compute the error from realisations
+            medians = np.fromiter(
+                (sample.median(error=False) for sample in self.iterSamples()),
+                dtype=np.dtype(median))
+            return median, np.nanstd(medians)
         else:
             return median
 
@@ -283,130 +306,170 @@ class RedshiftData(object):
 
 
 class RedshiftDataBinned(RedshiftData):
-    """
-    Container a joint tomographic bin fitting. The weighted sum of the bins
-    is fitted against the full sample (master) and this container bundles all
-    the redshift distributions for such a fit.
-
-    Parameters
-    ----------
-    bins : array_like of RedshiftData
-        Set of data from tomographic bins as RedshiftData.
-    master : RedshiftData
-        Data of the full sample redshift distribution.
-    """
 
     def __init__(self, bins, master):
-        assert(all(isinstance(b, RedshiftData) for b in bins))
-        assert(isinstance(master, RedshiftData))
-        # all input samples must have the same redshift sampling
-        assert(all(np.all(d.z == master.z) for d in bins))
-        self.data = [*bins, master]
-        self.n_data = len(self.data)
-        # assemble all data points into a vector
-        self.z = np.concatenate([d.z for d in self.data])
-        self.n = np.concatenate([d.n for d in self.data])
-        self.dn = np.concatenate([d.dn for d in self.data])
-        # check if there are any realisations
-        if any(d.reals is None for d in self.data):
-            self.reals = None
+        self._data = [*bins, master]
+        for data in self._data:
+            if not isinstance(data, RedshiftData):
+                raise TypeError(
+                    "'bins' and 'master' must be of type 'RedshiftData'")
+        # check same number of samples
+        if self.hasSamples():
+            n_samples = [data.getSampleNo() for data in self._data]
+            if not all(n_samples[0] == n for n in n_samples[1:]):
+                raise ValueError(
+                    "Number of data samples does not match in input")
+
+    def __len__(self):
+        return len(self._data)
+
+    def mask(self, concat=False):
+        masks = [data.mask() for data in self._data]
+        if concat:
+            return np.concatenate(masks)
         else:
-            self.reals = np.concatenate([d.reals for d in self.data], axis=1)
+            return masks
 
-    def split(self):
-        """
-        Split the data vector back into a list of bin data samples
-
-        Returns
-        -------
-        bins : list of RedshiftData
-            Data split into tomographic bins with the full sample in the last
-            position
-        """
-        binned_z = np.split(self.z, self.n_data)
-        binned_n = np.split(self.n, self.n_data)
-        binned_dn = np.split(self.dn, self.n_data)
-        bins = [
-            RedshiftData(z, n, dn)
-            for z, n, dn in zip(binned_z, binned_n, binned_dn)]
-        return bins
-
-    def mean(self):
-        return np.array([d.mean() for d in self.data])
-
-    def median(self):
-        return np.array([d.median() for d in self.data])
-
-    def resample(self, reals_idx=None):
-        """
-        If data vector realisations exist, one of these can be selected,
-        otherwise resample the data based on the standard error or the
-        covariance matrix.
-
-        Parameters
-        ----------
-        reals_idx : int
-            Index of data vector realisation. If None (default), generate a
-            random realisations based on the covariance matrix or standard
-            errors.
-
-        Returns
-        -------
-        new : BinnedRedshiftData
-            Copy of the BinnedRedshiftData instance with resampled redshift
-            distribution.
-        """
-        # invalid situation
-        if self.reals is None and reals_idx is not None:
-            raise KeyError("no realisations found to draw from")
-        # get specific realisation
-        elif self.reals is not None and reals_idx is not None:
-            n = self.reals[reals_idx]
-        # draw random realisations
-        elif reals_idx is None and self.cov is None:
-            n = np.random.normal(self.n, self.dn)
+    def len(self, all=False, concat=False):
+        lens = [data.len(all) for data in self._data]
+        if concat:
+            return sum(lens)
         else:
-            n = np.random.multivariate_normal(self.n, self.cov)
-        # split the data back into the individual data sets
-        binned_z = np.split(self.z, self.n_data)
-        binned_n = np.split(n, self.n_data)
-        binned_dn = np.split(self.dn, self.n_data)
-        bins = [
-            RedshiftData(z, n, dn)
-            for z, n, dn in zip(binned_z, binned_n, binned_dn)]
-        new = self.__class__(bins[:-1], bins[-1])
-        # add the missing class members
-        new.n_data = self.n_data
-        if self.cov is not None:
-            new.setCovariance(self.cov)
+            return lens
+
+    def z(self, all=False, concat=False):
+        zs = [data.z(all) for data in self._data]
+        if concat:
+            return np.concatenate(zs)
+        else:
+            return zs
+
+    def n(self, all=False, concat=False):
+        ns = [data.n(all) for data in self._data]
+        if concat:
+            return np.concatenate(ns)
+        else:
+            return ns
+
+    def dn(self, all=False, concat=False):
+        dns = [data.dn(all) for data in self._data]
+        if concat:
+            return np.concatenate(dns)
+        else:
+            return dns
+
+    def hasSamples(self, require=False):
+        return all(data.hasSamples(require) for data in self._data)
+
+    def getSampleNo(self):
+        self.hasSamples(require=True)
+        return self._data[0].getSampleNo()
+
+    def getSamples(self, all=False, concat=False):
+        self.hasSamples(require=True)
+        bin_samples = [data.getSamples(all) for data in self._data]
+        if concat:
+            if all:
+                samples = np.concatenate(bin_samples, axis=1)
+            else:
+                samples = []
+                for sample_idx in range(self.getSampleNo()):
+                    samples.append(
+                        np.concatenate([
+                            bin_samples[bin_idx][sample_idx]
+                            for bin_idx in range(len(self))]))
+            return samples
+        else:
+            return bin_samples
+
+    def hasCovMat(self, require=False):
+        return all(data.hasCovMat(require) for data in self._data)
+
+    @staticmethod
+    def _make_block_matrix(diagonal_blocks):
+        shapes = [
+            [b.shape[0] for b in diagonal_blocks],
+            [b.shape[1] for b in diagonal_blocks]]
+        blocks = []
+        for i0, shape0 in enumerate(shapes[0]):
+            row = []
+            for i1, shape1 in enumerate(shapes[1]):
+                if i0 == i1:
+                    row.append(diagonal_blocks[i0])
+                else:
+                    row.append(np.zeros((shape0, shape1)))
+            blocks.append(row)
+        return np.block(blocks)
+
+    def getCovMat(self, all=False, concat=False):
+        covmats = [data.getCovMat(all) for data in self._data]
+        if concat:
+            return self._make_block_matrix(covmats)
+        else:
+            return covmats
+
+    def getCovMatInv(self, all=False, concat=False):
+        invmats = [data.getCovMatInv(all) for data in self._data]
+        if concat:
+            return self._make_block_matrix(invmats)
+        else:
+            return invmats
+
+    def samplingMethod(self):
+        methods = [data.samplingMethod() for data in self._data]
+        if all(method == "samples" for method in methods):
+            return "samples"
+        elif all(method != "stderr" for method in methods):
+            return "covmat"
+        else:
+            return "stderr"
+
+    def _parse_method(self, method):
+        if method is None:
+            method = self.samplingMethod()
+        elif method not in ("samples", "covmat", "stderr"):
+            raise ValueError("invalid method name '{:}'".format(method))
+        return method
+
+    def getSample(self, idx=None, method=None):
+        method = self._parse_method(method)
+        samples = [data.getSample(idx, method=method) for data in self._data]
+        new = self.__class__(samples[:-1], samples[-1])
         return new
 
+    def iterSamples(self, limit=1000, method=None):
+        method = self._parse_method(method)
+        if self.hasSamples() and method == "samples":
+            limit = self.getSampleNo()
+        for idx in range(limit):
+            yield self.getSample(idx, method)
+
+    def norm(self):
+        return [data.norm() for data in self._data]
+
+    def mean(self, error=False):
+        means = [data.mean(error) for data in self._data]
+        if error:
+            return [m[0] for m in means], [m[1] for m in means]
+        else:
+            return means
+
+    def median(self, error=False):
+        medians = [data.median(error) for data in self._data]
+        if error:
+            return [m[0] for m in medians], [m[1] for m in medians]
+        else:
+            return medians
+
     def plot(self, fig=None, z_offset=0.0, **kwargs):
-        """
-        Create an error bar plot the data sample. Tomographic bins are arranged
-        in a grid of separate plots followed by the (full) master sample.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure
-            Plot on an existig figure which must have at least n_data axes.
-        **kwargs : keyword arguments
-            Arugments parsed on to matplotlib.pyplot.errorbar
-
-        Returns
-        -------
-        fig : matplotlib.figure
-            The figure containting the plots.
-        """
-        bins = self.split()
         if fig is None:
-            fig = Figure(self.n_data)
+            fig = Figure(len(self))
             axes = np.asarray(fig.axes)
         else:
             axes = np.asarray(fig.axes)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            bins[i].plot(ax=ax, z_offset=z_offset, **kwargs)
+            self._data[i].plot(ax=ax, z_offset=z_offset, **kwargs)
         return fig
 
 
