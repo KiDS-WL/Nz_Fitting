@@ -1,18 +1,18 @@
 from collections import OrderedDict
 from copy import copy
+import os
 
 import numpy as np
 import numpy.ma as ma
 import pandas as pd
 from corner import corner
-from matplotlib import pyplot as plt
 from matplotlib import cm as colormaps
+from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.integrate import cumtrapz
 from scipy.interpolate import interp1d
 
-from .utils import format_variable, Figure
-
+from .utils import Figure, format_variable
 
 DEFAULT_EXT_DATA = ".dat"
 DEFAULT_EXT_BOOT = ".boot"
@@ -53,12 +53,53 @@ class RedshiftData:
             self._covmat.mask[:, mask] = True
 
     @staticmethod
-    def read(basepath):
-        NotImplemented
-        return self.__class__()
+    def read(
+            basepath, ext_dat=DEFAULT_EXT_DATA,
+            ext_boot=DEFAULT_EXT_BOOT, ext_cov=DEFAULT_EXT_COV):
+        file_dat = basepath + ext_dat
+        if not os.path.exists(file_dat):
+            raise OSError("input data file '{:}' not found".format(file_dat))
+        # load data and create a RedshiftData instance
+        data = np.loadtxt(file_dat)
+        if len(data.shape) != 2:
+            raise ValueError("expected 2-dim data file")
+        data = RedshiftData(*data.T[:3])
+        # try loading samples or a covariance matrix
+        if os.path.exists(basepath + ext_boot):
+            samples = np.loadtxt(basepath + ext_boot)
+            data.setSamples(samples)
+        # if we have samples we do not need the covariance anymore
+        elif os.path.exists(basepath + ext_cov):
+            covmat = np.loadtxt(basepath + ext_cov)
+            data.setCovMat(covmat)
+        return data
 
-    def write(self, basepath):
-        NotImplemented
+    def write(
+            self, basepath, head_dat=None,
+            head_boot=None, head_cov=None, ext_dat=DEFAULT_EXT_DATA,
+            ext_boot=DEFAULT_EXT_BOOT, ext_cov=DEFAULT_EXT_COV):
+        # write the data
+        data = np.stack([self.z(True), self.n(True), self.dn(True)]).T
+        if head_dat is None:
+            head_dat = (
+                "col 1 = redshift\n" +
+                "col 2 = fraction at redshift\n" +
+                "col 3 = error of fraction")
+        np.savetxt(basepath + ext_dat, data, header=head_dat, fmt="% 9.6f")
+        # write the samples
+        if self.hasSamples():
+            if head_boot is None:
+                head_boot = "samples of fraction at redshift"
+            np.savetxt(
+                basepath + ext_boot, self.getSamples(all=True),
+                header=head_boot, fmt="% 9.6f")
+        # write the covariance matrix
+        if self.hasCovMat():
+            if head_cov is None:
+                head_cov = "covariance matrix of fraction at redshift"
+            np.savetxt(
+                basepath + ext_cov, self.getCovMat(all=True),
+                header=head_cov, fmt="% 12.5e")
 
     def mask(self, **kwargs):
         return self._z.mask
