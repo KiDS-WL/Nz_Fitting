@@ -440,7 +440,7 @@ class RedshiftDataBinned(BaseData):
     def getWeight(self):
         weights = [data.getWeight() for data in self._data]
         master = weights.pop()
-        if sum(weights) != master:
+        if not np.isclose(sum(weights), master):
             raise ValueError("bin weights do not add up to master weight")
         return [w / master for w in [*weights, master]]
 
