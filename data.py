@@ -6,10 +6,17 @@ import numpy.ma as ma
 import pandas as pd
 from corner import corner
 from matplotlib import pyplot as plt
+from matplotlib import cm as colormaps
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.integrate import cumtrapz
 from scipy.interpolate import interp1d
 
 from .utils import format_variable, Figure
+
+
+DEFAULT_EXT_DATA = ".dat"
+DEFAULT_EXT_BOOT = ".boot"
+DEFAULT_EXT_COV = ".cov"
 
 
 class RedshiftData:
@@ -46,10 +53,11 @@ class RedshiftData:
             self._covmat.mask[:, mask] = True
 
     @staticmethod
-    def read(path):
+    def read(basepath):
         NotImplemented
+        return self.__class__()
 
-    def write(self, path):
+    def write(self, basepath):
         NotImplemented
 
     def mask(self, **kwargs):
@@ -154,11 +162,14 @@ class RedshiftData:
         # do some basic checks with the diagonal
         self._covmat = covmat
         self._update_masks()
-        variance = self.dn()**2
-        cov_diag = np.diag(self._covmat).compressed()
-        if not np.isclose(cov_diag, variance).all():
-            raise ValueError(
-                "the variance and the covariance matrix diagonal do not match")
+        cov_diag = np.diag(self._covmat)
+        if np.all(self.dn() == 1.0):
+            self.setErrors(np.sqrt(cov_diag))
+        else:
+            variance = self.dn() ** 2
+            if not np.isclose(cov_diag.compressed(), variance).all():
+                raise ValueError(
+                    "variance and covariance matrix diagonal do not match")
 
     def hasCovMat(self, require=False):
         has_covmat = hasattr(self, "_covmat")
@@ -174,6 +185,19 @@ class RedshiftData:
             n_good = self.len()
             covmat = self._covmat.compressed().reshape((n_good, n_good))
         return covmat
+
+    def getCorrMat(self, all=False, **kwargs):
+        covmat = self.getCovMat(all=False)
+        # normalize the matrix elements
+        norm = np.sqrt(np.diag(covmat))
+        corrmat = covmat / np.outer(norm, norm)
+        if all:
+            # get the bad columns and merge them with the correlation matrix
+            corrmat_full = self._covmat.copy()
+            corrmat_full[corrmat_full != ma.masked] = corrmat.flatten()
+            return corrmat_full.filled(np.nan)
+        else:
+            return corrmat
 
     def getCovMatInv(self, all=False, **kwargs):
         if not hasattr(self, "_covmat_inv"):
@@ -273,7 +297,7 @@ class RedshiftData:
         else:
             return median
 
-    def plot_points(self, ax=None, z_offset=0.0, mark_edges=True, **kwargs):
+    def plotPoints(self, ax=None, z_offset=0.0, mark_edges=True, **kwargs):
         if ax is None:
             fig = Figure(1)
             ax = fig.axes[0]
@@ -290,7 +314,7 @@ class RedshiftData:
             self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
         return fig
 
-    def plot_hist(self, ax=None, **kwargs):
+    def plotHist(self, ax=None, **kwargs):
         if ax is None:
             fig = Figure(1)
             ax = fig.axes[0]
@@ -309,6 +333,20 @@ class RedshiftData:
         lines = ax.step(self.getEdges(), y, **kwargs)
         fill.set_color(lines[0].get_color())
         return fig
+
+    def plotCorrMat(self, all=True, ax=None, **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        corrmat = self.getCorrMat(all=all)
+        # create space for a new axis hosting the color map
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        # represent NaNs by light grey
+        cmap = colormaps.bwr
+        cmap.set_bad(color="0.7")
+        # plot and add color map to new axis
+        im = ax.imshow(corrmat, vmin=-1.0, vmax=1.0, cmap=cmap)
+        plt.gcf().colorbar(im, cax=cax, orientation="vertical")
 
 
 class RedshiftDataBinned:
@@ -419,7 +457,7 @@ class RedshiftDataBinned:
         return all(data.hasCovMat(require) for data in self._data)
 
     @staticmethod
-    def _make_block_matrix(diagonal_blocks):
+    def _make_block_matrix(diagonal_blocks, fill_value=0.0):
         shapes = [
             [b.shape[0] for b in diagonal_blocks],
             [b.shape[1] for b in diagonal_blocks]]
@@ -430,7 +468,7 @@ class RedshiftDataBinned:
                 if i0 == i1:
                     row.append(diagonal_blocks[i0])
                 else:
-                    row.append(np.zeros((shape0, shape1)))
+                    row.append(np.full((shape0, shape1), fill_value))
             blocks.append(row)
         return np.block(blocks)
 
@@ -440,6 +478,13 @@ class RedshiftDataBinned:
             return self._make_block_matrix(covmats)
         else:
             return covmats
+
+    def getCorrMat(self, all=False, concat=False):
+        corrmats = [data.getCorrMat(all) for data in self._data]
+        if concat:
+            return self._make_block_matrix(corrmats)
+        else:
+            return corrmats
 
     def getCovMatInv(self, all=False, concat=False):
         invmats = [data.getCovMatInv(all) for data in self._data]
@@ -516,20 +561,34 @@ class RedshiftDataBinned:
             axes = np.asarray(fig.axes)
         return fig, axes
 
-    def plot_points(self, fig=None, z_offset=0.0, mark_edges=True, **kwargs):
+    def plotPoints(self, fig=None, z_offset=0.0, mark_edges=True, **kwargs):
         fig, axes = self._get_fig(fig)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            self._data[i].plot_points(
+            self._data[i].plotPoints(
                 ax=ax, z_offset=z_offset, mark_edges=mark_edges, **kwargs)
         return fig
 
-    def plot_hist(self, fig=None, **kwargs):
+    def plotHist(self, fig=None, **kwargs):
         fig, axes = self._get_fig(fig)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            self._data[i].plot_hist(ax=ax, **kwargs)
+            self._data[i].plotHist(ax=ax, **kwargs)
         return fig
+
+    def plotCorrMat(self, all=True, ax=None, **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        corrmat = self.getCorrMat(all=all, concat=True)
+        # create space for a new axis hosting the color map
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        # represent NaNs by light grey
+        cmap = colormaps.bwr
+        cmap.set_bad(color="0.7")
+        # plot and add color map to new axis
+        im = ax.imshow(corrmat, vmin=-1.0, vmax=1.0, cmap=cmap)
+        plt.gcf().colorbar(im, cax=cax, orientation="vertical")
 
 
 class FitParameters(object):
