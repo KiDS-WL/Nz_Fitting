@@ -19,7 +19,38 @@ DEFAULT_EXT_BOOT = ".boot"
 DEFAULT_EXT_COV = ".cov"
 
 
-class RedshiftData:
+class BaseData:
+
+    def _parse_method(self, method):
+        if method is None:
+            method = self.samplingMethod()
+        elif method not in ("samples", "covmat", "stderr"):
+            raise ValueError("invalid method name '{:}'".format(method))
+        return method
+
+    def iterSamples(self, limit=1000, method=None):
+        method = self._parse_method(method)
+        if self.hasSamples() and method == "samples":
+            limit = self.getSampleNo()
+        for idx in range(limit):
+            yield self.getSample(idx)
+
+    def plotCorrMat(self, all=True, ax=None, **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        corrmat = self.getCorrMat(all=all, concat=True)
+        # create space for a new axis hosting the color map
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size='5%', pad=0.05)
+        # represent NaNs by light grey
+        cmap = colormaps.bwr
+        cmap.set_bad(color="0.7")
+        # plot and add color map to new axis
+        im = ax.imshow(corrmat, vmin=-1.0, vmax=1.0, cmap=cmap)
+        plt.gcf().colorbar(im, cax=cax, orientation="vertical")
+
+
+class RedshiftData(BaseData):
 
     def __init__(self, z, n, dn=None, weight=1.0):
         self._z = ma.masked_invalid(z)
@@ -266,13 +297,6 @@ class RedshiftData:
         else:
             return "stderr"
 
-    def _parse_method(self, method):
-        if method is None:
-            method = self.samplingMethod()
-        elif method not in ("samples", "covmat", "stderr"):
-            raise ValueError("invalid method name '{:}'".format(method))
-        return method
-
     def getSample(self, idx=None, method=None):
         method = self._parse_method(method)
         if method == "samples" and idx is not None:
@@ -297,13 +321,6 @@ class RedshiftData:
             new.setEdges(self.getEdges())
         return new
 
-    def iterSamples(self, limit=1000, method=None):
-        method = self._parse_method(method)
-        if self.hasSamples() and method == "samples":
-            limit = self.getSampleNo()
-        for idx in range(limit):
-            yield self.getSample(idx)
-
     def norm(self):
         norm = np.trapz(self.n(), x=self.z())
         return norm if norm >= 0.0 else np.nan
@@ -314,7 +331,12 @@ class RedshiftData:
     def cdf(self, all=False, **kwargs):
         cdf = cumtrapz(self.n(), x=self.z(), initial=0.0)
         cdf /= cdf[-1] if cdf[-1] > 0.0 else np.nan  # normalisation
-        return cdf
+        if all:
+            cdf_full = self._n.copy()
+            cdf_full[cdf_full != ma.masked] = cdf
+            return cdf_full.filled(np.nan)
+        else:
+            return cdf
 
     def mean(self, error=False):
         z = self.z()
@@ -377,22 +399,8 @@ class RedshiftData:
         fill.set_color(lines[0].get_color())
         return fig
 
-    def plotCorrMat(self, all=True, ax=None, **kwargs):
-        if ax is None:
-            ax = plt.gca()
-        corrmat = self.getCorrMat(all=all)
-        # create space for a new axis hosting the color map
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
-        # represent NaNs by light grey
-        cmap = colormaps.bwr
-        cmap.set_bad(color="0.7")
-        # plot and add color map to new axis
-        im = ax.imshow(corrmat, vmin=-1.0, vmax=1.0, cmap=cmap)
-        plt.gcf().colorbar(im, cax=cax, orientation="vertical")
 
-
-class RedshiftDataBinned:
+class RedshiftDataBinned(BaseData):
 
     def __init__(self, bins, master):
         self._data = [*bins, master]
@@ -410,40 +418,24 @@ class RedshiftDataBinned:
     def __len__(self):
         return len(self._data)
 
+    def _collect(self, attr, *args, callback=None, apply=False):
+        items = [getattr(data, attr)(*args) for data in self._data]
+        return callback(items) if apply else items
+
     def mask(self, concat=False):
-        masks = [data.mask() for data in self._data]
-        if concat:
-            return np.concatenate(masks)
-        else:
-            return masks
+        return self._collect("mask", callback=np.concatenate, apply=concat)
 
     def len(self, all=False, concat=False):
-        lens = [data.len(all) for data in self._data]
-        if concat:
-            return sum(lens)
-        else:
-            return lens
+        return self._collect("len", all, callback=sum, apply=concat)
 
     def z(self, all=False, concat=False):
-        zs = [data.z(all) for data in self._data]
-        if concat:
-            return np.concatenate(zs)
-        else:
-            return zs
+        return self._collect("z", all, callback=np.concatenate, apply=concat)
 
     def n(self, all=False, concat=False):
-        ns = [data.n(all) for data in self._data]
-        if concat:
-            return np.concatenate(ns)
-        else:
-            return ns
+        return self._collect("n", all, callback=np.concatenate, apply=concat)
 
     def dn(self, all=False, concat=False):
-        dns = [data.dn(all) for data in self._data]
-        if concat:
-            return np.concatenate(dns)
-        else:
-            return dns
+        return self._collect("dn", all, callback=np.concatenate, apply=concat)
 
     def getWeight(self):
         weights = [data.getWeight() for data in self._data]
@@ -453,11 +445,11 @@ class RedshiftDataBinned:
         return [w / master for w in [*weights, master]]
 
     def getEdges(self, concat=False):
-        edges = [data.getEdges() for data in self._data]
-        if concat:
-            return np.concat(edges)
-        else:
-            return edges
+        return self._collect("getEdges", callback=np.concatenate, apply=concat)
+
+    def iterData(self):
+        for data in self._data:
+            yield data
 
     def iterBins(self):
         for data in self._data[:-1]:
@@ -500,7 +492,7 @@ class RedshiftDataBinned:
         return all(data.hasCovMat(require) for data in self._data)
 
     @staticmethod
-    def _make_block_matrix(diagonal_blocks, fill_value=0.0):
+    def _block_matrix(diagonal_blocks, fill_value=0.0):
         shapes = [
             [b.shape[0] for b in diagonal_blocks],
             [b.shape[1] for b in diagonal_blocks]]
@@ -521,25 +513,16 @@ class RedshiftDataBinned:
         return matrix
 
     def getCovMat(self, all=False, concat=False):
-        covmats = [data.getCovMat(all) for data in self._data]
-        if concat:
-            return self._make_block_matrix(covmats)
-        else:
-            return covmats
+        return self._collect(
+            "getCovMat", all, callback=self._block_matrix, apply=concat)
 
     def getCorrMat(self, all=False, concat=False):
-        corrmats = [data.getCorrMat(all) for data in self._data]
-        if concat:
-            return self._make_block_matrix(corrmats)
-        else:
-            return corrmats
+        return self._collect(
+            "getCorrMat", all, callback=self._block_matrix, apply=concat)
 
     def getCovMatInv(self, all=False, concat=False):
-        invmats = [data.getCovMatInv(all) for data in self._data]
-        if concat:
-            return self._make_block_matrix(invmats)
-        else:
-            return invmats
+        return self._collect(
+            "getCovMatInv", all, callback=self._block_matrix, apply=concat)
 
     def samplingMethod(self):
         methods = [data.samplingMethod() for data in self._data]
@@ -550,42 +533,20 @@ class RedshiftDataBinned:
         else:
             return "stderr"
 
-    def _parse_method(self, method):
-        if method is None:
-            method = self.samplingMethod()
-        elif method not in ("samples", "covmat", "stderr"):
-            raise ValueError("invalid method name '{:}'".format(method))
-        return method
-
     def getSample(self, idx=None, method=None):
         method = self._parse_method(method)
         samples = [data.getSample(idx, method=method) for data in self._data]
         new = self.__class__(samples[:-1], samples[-1])
         return new
 
-    def iterSamples(self, limit=1000, method=None):
-        method = self._parse_method(method)
-        if self.hasSamples() and method == "samples":
-            limit = self.getSampleNo()
-        for idx in range(limit):
-            yield self.getSample(idx, method)
-
     def norm(self):
         return [data.norm() for data in self._data]
 
     def pdf(self, all=False, concat=False):
-        pdfs = [data.pdf(all) for data in self._data]
-        if concat:
-            return np.concatenate(pdfs)
-        else:
-            return pdfs
+        return self._collect("pdf", all, callback=np.concatenate, apply=concat)
 
     def cdf(self, all=False, concat=False):
-        cdfs = [data.cdf(all) for data in self._data]
-        if concat:
-            return np.concatenate(cdfs)
-        else:
-            return cdfs
+        return self._collect("cdf", all, callback=np.concatenate, apply=concat)
 
     def mean(self, error=False):
         means = [data.mean(error) for data in self._data]
@@ -623,20 +584,6 @@ class RedshiftDataBinned:
         for i, ax in enumerate(axes.flatten()):
             self._data[i].plotHist(ax=ax, **kwargs)
         return fig
-
-    def plotCorrMat(self, all=True, ax=None, **kwargs):
-        if ax is None:
-            ax = plt.gca()
-        corrmat = self.getCorrMat(all=all, concat=True)
-        # create space for a new axis hosting the color map
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size='5%', pad=0.05)
-        # represent NaNs by light grey
-        cmap = colormaps.bwr
-        cmap.set_bad(color="0.7")
-        # plot and add color map to new axis
-        im = ax.imshow(corrmat, vmin=-1.0, vmax=1.0, cmap=cmap)
-        plt.gcf().colorbar(im, cax=cax, orientation="vertical")
 
 
 class FitParameters(object):
