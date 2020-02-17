@@ -98,6 +98,8 @@ class RedshiftData:
             raise ValueError(
                 "expected bin edges of shape ({:d},), ".format(n_bins) + 
                 "but got shape {:s}".format(str(edges.shape)))
+        if np.any(np.diff(edges) <= 0.0):
+            raise ValueError("bins must increase monotonically")
         self._edges = np.array(edges)
 
     def hasEdges(self, require=False):
