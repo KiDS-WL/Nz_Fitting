@@ -49,7 +49,7 @@ class RedshiftData:
             getattr(self, attr).mask = mask
         # apply to covariance matrix
         if self.hasCovMat():
-            self._covmat.mask[mask] = True
+            self._covmat.mask[mask, :] = True
             self._covmat.mask[:, mask] = True
 
     @staticmethod
@@ -470,7 +470,12 @@ class RedshiftDataBinned:
                 else:
                     row.append(np.full((shape0, shape1), fill_value))
             blocks.append(row)
-        return np.block(blocks)
+        matrix = np.block(blocks)
+        # fill missing NaNs everywhere
+        mask = np.isnan(np.diag(matrix))
+        matrix[mask, :] = np.nan
+        matrix[:, mask] = np.nan
+        return matrix
 
     def getCovMat(self, all=False, concat=False):
         covmats = [data.getCovMat(all) for data in self._data]
