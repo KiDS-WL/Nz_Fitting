@@ -1,5 +1,4 @@
-from .data import (FitParameters, RedshiftData, RedshiftDataBinned,
-                   RedshiftHistogram)
+from .data import FitParameters, RedshiftData, RedshiftDataBinned
 from .fitting import CurveFit
 from .models import (BiasFitModel, CombModelBinned, GaussianComb,
                      LogGaussianComb, PowerLawBias, ShiftModel,

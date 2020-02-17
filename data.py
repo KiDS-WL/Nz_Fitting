@@ -12,52 +12,9 @@ from scipy.interpolate import interp1d
 from .utils import format_variable, Figure
 
 
-class RedshiftHistogram(object):
-
-    def __init__(self, bin_centers, counts):
-        self.z = np.asarray(bin_centers)
-        assert(len(self) == len(counts))
-        # store the normalized counts
-        self.pdf = np.asarray(counts) / np.trapz(counts, x=self.z)
-        self.cdf = cumtrapz(self.pdf, x=self.z, initial=0.0)
-
-    def __len__(self):
-        return len(self.z)
-
-    def plot(self, ax=None, **kwargs):
-        """
-        Create an error bar plot the data histogram.
-
-        Parameters
-        ----------
-        ax : matplotlib.axes
-            Specifies the axis to plot on.
-        **kwargs : keyword arguments
-            Arugments parsed on to matplotlib.pyplot.step
-        """
-        if ax is None:
-            fig = Figure(1)
-            ax = plt.gca()
-        else:
-            fig = plt.gcf()
-        y = np.append(self.pdf[0], self.pdf)
-        fill_kwargs = {}
-        if "color" not in kwargs:
-            kwargs["color"] = "0.6"
-        if "label" in kwargs:
-            fill_kwargs["label"] = kwargs.pop("label")
-        fill = ax.fill_between(
-            self.z, 0.0, y,
-            step="pre", alpha=0.3, **fill_kwargs)
-        lines = ax.step(self.z, y, **kwargs)
-        fill.set_color(lines[0].get_color())
-        return fig
-
-
-class RedshiftData(object):
+class RedshiftData:
 
     def __init__(self, z, n, dn=None, weight=1.0):
-        self.weight = float(weight)
         self._z = ma.masked_invalid(z)
         self._n = ma.masked_invalid(n)
         if dn is None:  # create a dummmy array
@@ -71,6 +28,7 @@ class RedshiftData(object):
                 "dn ({:d}}) do not match".format(len(dn)))
         # synchronize the individual masks
         self._update_masks()
+        self.setWeight(weight)
 
     def _update_masks(self, extra_mask=None):
         # check which values are unmasked in all data elements
@@ -109,6 +67,12 @@ class RedshiftData(object):
     def dn(self, all=False, **kwargs):
         return self._dn.filled(np.nan) if all else self._dn.compressed()
 
+    def setWeight(self, weight):
+        self._weight = np.float64(weight)
+
+    def getWeight(self):
+        return self._weight
+
     def setErrors(self, errors):
         errors = ma.masked_invalid(errors)
         n_data = self.len(all=True)
@@ -119,6 +83,24 @@ class RedshiftData(object):
         self._dn = errors
         # synchronize the individual masks
         self._update_masks()
+
+    def setEdges(self, edges):
+        n_bins = self.len(all=True) + 1
+        if edges.shape != (n_bins,):
+            raise ValueError(
+                "expected bin edges of shape ({:d},), ".format(n_bins) + 
+                "but got shape {:s}".format(str(edges.shape)))
+        self._edges = np.array(edges)
+
+    def hasEdges(self, require=False):
+        has_edges = hasattr(self, "_edges")
+        if require and not has_edges:
+            raise AttributeError("redshift bin edges not set")
+        return has_edges
+
+    def getEdges(self):
+        self.hasEdges(require=True)
+        return self._edges
 
     def setSamples(self, samples):
         samples = ma.masked_invalid(samples)
@@ -242,7 +224,10 @@ class RedshiftData(object):
                 sample[sample != ma.masked] = np.random.normal(
                     self.n(all=False), self.dn(all=False))
         new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
-        new.setCovMat(self.getCovMat(all=True))
+        if self.hasCovMat():
+            new.setCovMat(self.getCovMat(all=True))
+        if self.hasEdges():
+            new.setEdges(self.getEdges())
         return new
 
     def iterSamples(self, limit=1000, method=None):
@@ -256,9 +241,17 @@ class RedshiftData(object):
         norm = np.trapz(self.n(), x=self.z())
         return norm if norm >= 0.0 else np.nan
 
+    def pdf(self, all=False, **kwargs):
+        return self.n(all) / self.norm()
+
+    def cdf(self, all=False, **kwargs):
+        cdf = cumtrapz(self.n(), x=self.z(), initial=0.0)
+        cdf /= cdf[-1] if cdf[-1] > 0.0 else np.nan  # normalisation
+        return cdf
+
     def mean(self, error=False):
         z = self.z()
-        mean = np.trapz(z * self.n() / self.norm(), x=z)
+        mean = np.trapz(z * self.pdf(), x=z)
         if error:
             # compute the error from realisations
             means = np.fromiter(
@@ -269,15 +262,8 @@ class RedshiftData(object):
             return mean
 
     def median(self, error=False):
-        z = self.z()
-        cdf = cumtrapz(self.n(), x=z, initial=0.0)
-        if cdf[-1] < 0.0:
-            norm = np.nan
-        else:
-            norm = cdf[-1]
-        cdf /= norm
         # median: z where cdf(z) == 0.5
-        median = np.interp(0.5, cdf, z)  # returns redshift
+        median = np.interp(0.5, self.cdf(), self.z())  # returns redshift
         if error:
             # compute the error from realisations
             medians = np.fromiter(
@@ -287,7 +273,7 @@ class RedshiftData(object):
         else:
             return median
 
-    def plot(self, ax=None, z_offset=0.0, mark_bad=False, **kwargs):
+    def plot_points(self, ax=None, z_offset=0.0, mark_edges=True, **kwargs):
         if ax is None:
             fig = Figure(1)
             ax = fig.axes[0]
@@ -295,17 +281,37 @@ class RedshiftData(object):
             fig = plt.gcf()
         plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
         plot_kwargs.update(kwargs)
-        if mark_bad:
-            z_bad = self._z[self.mask()].data
+        if mark_edges and self.hasEdges():
+            edges = self.getEdges()
             ax.plot(
-                z_bad, np.zeros_like(z_bad),
+                edges, np.zeros_like(edges),
                 color=plot_kwargs["color"], marker="|", ls="none")
         ax.errorbar(
             self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
         return fig
 
+    def plot_hist(self, ax=None, **kwargs):
+        if ax is None:
+            fig = Figure(1)
+            ax = fig.axes[0]
+        else:
+            fig = plt.gcf()
+        pdf = self.pdf(all=True)
+        y = np.append(pdf[0], pdf)
+        fill_kwargs = {}
+        if "color" not in kwargs:
+            kwargs["color"] = "0.6"
+        if "label" in kwargs:
+            fill_kwargs["label"] = kwargs.pop("label")
+        fill = ax.fill_between(
+            self.getEdges(), 0.0, np.nan_to_num(y), 
+            step="pre", alpha=0.3, **fill_kwargs)
+        lines = ax.step(self.getEdges(), y, **kwargs)
+        fill.set_color(lines[0].get_color())
+        return fig
 
-class RedshiftDataBinned(RedshiftData):
+
+class RedshiftDataBinned:
 
     def __init__(self, bins, master):
         self._data = [*bins, master]
@@ -357,6 +363,33 @@ class RedshiftDataBinned(RedshiftData):
             return np.concatenate(dns)
         else:
             return dns
+
+    def getWeight(self):
+        weights = [data.getWeight() for data in self._data]
+        master = weights.pop()
+        if sum(weights) != master:
+            raise ValueError("bin weights do not add up to master weight")
+        return [w / master for w in [*weights, master]]
+
+    def getEdges(self, concat=False):
+        edges = [data.getEdges() for data in self._data]
+        if concat:
+            return np.concat(edges)
+        else:
+            return edges
+
+    def iterBins(self):
+        for data in self._data[:-1]:
+            yield data
+
+    def getMaster(self):
+        return self._data[-1]
+
+    def assertEqualZ(self):
+        zs = self.z()
+        ref_z = zs.pop()
+        for z in zs:
+            assert(np.all(z == ref_z))
 
     def hasSamples(self, require=False):
         return all(data.hasSamples(require) for data in self._data)
@@ -447,6 +480,20 @@ class RedshiftDataBinned(RedshiftData):
     def norm(self):
         return [data.norm() for data in self._data]
 
+    def pdf(self, all=False, concat=False):
+        pdfs = [data.pdf(all) for data in self._data]
+        if concat:
+            return np.concatenate(pdfs)
+        else:
+            return pdfs
+
+    def cdf(self, all=False, concat=False):
+        cdfs = [data.cdf(all) for data in self._data]
+        if concat:
+            return np.concatenate(cdfs)
+        else:
+            return cdfs
+
     def mean(self, error=False):
         means = [data.mean(error) for data in self._data]
         if error:
@@ -461,15 +508,27 @@ class RedshiftDataBinned(RedshiftData):
         else:
             return medians
 
-    def plot(self, fig=None, z_offset=0.0, **kwargs):
+    def _get_fig(self, fig):
         if fig is None:
             fig = Figure(len(self))
             axes = np.asarray(fig.axes)
         else:
             axes = np.asarray(fig.axes)
+        return fig, axes
+
+    def plot_points(self, fig=None, z_offset=0.0, mark_edges=True, **kwargs):
+        fig, axes = self._get_fig(fig)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            self._data[i].plot(ax=ax, z_offset=z_offset, **kwargs)
+            self._data[i].plot_points(
+                ax=ax, z_offset=z_offset, mark_edges=mark_edges, **kwargs)
+        return fig
+
+    def plot_hist(self, fig=None, **kwargs):
+        fig, axes = self._get_fig(fig)
+        # plot data sets the axes and delete the remaining ones from the grid
+        for i, ax in enumerate(axes.flatten()):
+            self._data[i].plot_hist(ax=ax, **kwargs)
         return fig
 
 
