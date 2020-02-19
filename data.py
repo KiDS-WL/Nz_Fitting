@@ -14,14 +14,23 @@ from scipy.interpolate import interp1d
 
 from .utils import Figure, format_variable
 
+
+DEFAULT_EXT_HIST = ".hist"
 DEFAULT_EXT_DATA = ".dat"
 DEFAULT_EXT_BOOT = ".boot"
 DEFAULT_EXT_COV = ".cov"
 
 
-class BaseData:
+class Base:
 
-    def _parse_method(self, method):
+    def _optimizerGetZ(self, attr):
+        assert(attr in ("z", "edges"))
+        return getattr(self, attr)(all=False, concat=False)
+
+
+class BaseData(Base):
+
+    def _parseMethod(self, method):
         if method is None:
             method = self.samplingMethod()
         elif method not in ("samples", "covmat", "stderr"):
@@ -29,7 +38,7 @@ class BaseData:
         return method
 
     def iterSamples(self, limit=1000, method=None):
-        method = self._parse_method(method)
+        method = self._parseMethod(method)
         if self.hasSamples() and method == "samples":
             limit = self.getSampleNo()
         for idx in range(limit):
@@ -50,25 +59,188 @@ class BaseData:
         plt.gcf().colorbar(im, cax=cax, orientation="vertical")
 
 
+class BaseBinned(Base):
+
+    def __len__(self):
+        return len(self._data)
+
+    def _collect(self, attr, *args, callback=None, apply=False):
+        items = [getattr(data, attr)(*args) for data in self._data]
+        return callback(items) if apply else items
+
+    def assertEqual(self, data):
+        ref = data.pop()
+        for d in data:
+            assert(np.all(d == ref))
+
+    def iterData(self):
+        for data in self._data:
+            yield data
+
+    def iterBins(self):
+        for data in self._data[:-1]:
+            yield data
+
+    def getMaster(self):
+        return self._data[-1]
+
+    def norm(self):
+        return [data.norm() for data in self._data]
+
+    def _getFig(self, fig):
+        if fig is None:
+            try:
+                n_plots = len(self)
+            except TypeError:
+                n_plots = 1
+            fig = Figure(n_plots)
+            axes = np.asarray(fig.axes)
+        else:
+            axes = np.asarray(fig.axes)
+        return fig, axes
+
+
+class RedshiftHistogram(Base):
+
+    def __init__(self, edges, counts, centers=None):
+        self._edges = np.array(edges)
+        self._n = np.array(counts)
+        if np.any(counts < 0.0):
+            raise ValueError("'counts' must note be negative")
+        if centers is None:
+            self._z = (self._edges[1:] + self._edges[:-1]) / 2.0
+        else:
+            self._z = np.array(centers)
+        edge_shape = (self._edges.shape[0] - 1, *self._edges.shape[1:])
+        if not (edge_shape == self._n.shape == self._z.shape):
+            raise ValueError(
+                "length of edges ({:d} - 1), ".format(len(edges)) +
+                "counts ({:d}) and ".format(len(counts)) +
+                "centers ({:d}) do not match".format(len(self._z)))
+        self._makePdf()
+        self._makeCdf()
+
+    @staticmethod
+    def read(basepath, ext=DEFAULT_EXT_HIST):
+        if not os.path.exists(basepath + ext):
+            raise OSError(
+                "input data file '{:}' not found".format(basepath + ext))
+        # load data and create a RedshiftHistogram instance
+        data = np.loadtxt(basepath + ext)
+        if len(data.shape) != 2:
+            raise ValueError("expected 2-dim data file")
+        edges = data[:, 0]
+        counts = data[:-1, 1]  # the last one is a fill value
+        if data.shape[1] > 2:
+            centers = data[:-1, 2]  # the last one is a fill value
+        else:
+            centers = None
+        hist = RedshiftHistogram(edges, counts, centers)
+        return hist
+
+    def write(self, basepath, head=None, ext=DEFAULT_EXT_HIST):
+        # write the data
+        data = np.zeros((len(self._edges), 3))
+        data[:, 0] = self._edges
+        data[:-1, 1] = self._n  # the last one is a fill value
+        data[:-1, 2] = self._z  # the last one is a fill value
+        if head is None:
+            head = (
+                "col 1 = bin edges\n" +
+                "col 2 = counts\n" +
+                "col 3 = bin centers")
+        np.savetxt(basepath + ext, data, header=head, fmt="% 12.5e")
+
+    def len(self, **kwargs):
+        return len(self._n)
+
+    def edges(self, **kwargs):
+        return self._edges.copy()
+
+    def counts(self, **kwargs):
+        return self._n.copy()
+
+    def centers(self, **kwargs):
+        return self._z.copy()
+
+    def norm(self):
+        return np.sum(self._n * np.diff(self._edges))
+
+    def _makePdf(self):
+        self._pdf = self._n / self.norm()
+
+    def pdf(self, z, **kwargs):
+        # look up the histogram values at the given redshift
+        idx = np.digitize(z, self._edges[1:-1])
+        pdf = self._pdf[idx]
+        # extrapolate zeros
+        pdf[z < self._edges[0]] = 0.0
+        pdf[z >= self._edges[-1]] = 0.0
+        return pdf
+
+    def _makeCdf(self):
+        cdf_edges = np.append(
+            0.0, np.cumsum(self._n * np.diff(self._edges)))
+        cdf_edges /= cdf_edges[-1]  # normalize
+        self._cdf_spline = interp1d(
+            self._edges, cdf_edges,
+            fill_value=(0.0, 1.0), bounds_error=False)
+
+    def cdf(self, z, **kwargs):
+        return self._cdf_spline(z)
+
+    def mean(self, **kwargs):
+        # interpret pdf as step function
+        pdf = self.pdf(self._edges[:-1])
+        pdf = np.append(pdf, pdf[-1])
+        # compute integral over pdf * z
+        pdf_times_z = pdf * self._edges
+        pdf_times_z_integral = (pdf_times_z[1:] + pdf_times_z[:-1]) / 2.0
+        pdf_times_z_integral *= np.diff(self._edges)
+        mean = np.sum(pdf_times_z_integral)
+        return mean
+
+    def median(self, **kwargs):
+        # median: z where cdf(z) == 0.5
+        cdf = self.cdf(self._edges)
+        median = np.interp(0.5, cdf, self._edges)  # returns redshift
+        return median
+
+    def plot(self, ax=None, **kwargs):
+        if ax is None:
+            fig = Figure(1)
+            ax = fig.axes[0]
+        else:
+            fig = plt.gcf()
+        y = np.append(self._pdf[0], self._pdf)
+        fill_kwargs = {}
+        if "color" not in kwargs:
+            kwargs["color"] = "0.6"
+        if "label" in kwargs:
+            fill_kwargs["label"] = kwargs.pop("label")
+        fill = ax.fill_between(
+            self._edges, 0.0, np.nan_to_num(y), 
+            step="pre", alpha=0.3, **fill_kwargs)
+        lines = ax.step(self._edges, y, **kwargs)
+        fill.set_color(lines[0].get_color())
+        return fig
+
+
 class RedshiftData(BaseData):
 
-    def __init__(self, z, n, dn=None, weight=1.0):
+    def __init__(self, z, n, dn):
         self._z = ma.masked_invalid(z)
         self._n = ma.masked_invalid(n)
-        if dn is None:  # create a dummmy array
-            self._dn = ma.array(np.ones_like(self._z))
-        else:
-            self._dn = ma.masked_invalid(dn)
+        self._dn = ma.masked_invalid(dn)
         if not (self._z.shape == self._n.shape == self._dn.shape):
             raise ValueError(
                 "length of z ({:d}), ".format(len(z)) +
                 "n ({:d}) and ".format(len(n)) +
                 "dn ({:d}}) do not match".format(len(dn)))
         # synchronize the individual masks
-        self._update_masks()
-        self.setWeight(weight)
+        self._updateMasks()
 
-    def _update_masks(self, extra_mask=None):
+    def _updateMasks(self, extra_mask=None):
         # check which values are unmasked in all data elements
         mask = self._z.mask | self._n.mask | self._dn.mask
         if self.hasCovMat():
@@ -147,12 +319,6 @@ class RedshiftData(BaseData):
     def dn(self, all=False, **kwargs):
         return self._dn.filled(np.nan) if all else self._dn.compressed()
 
-    def setWeight(self, weight):
-        self._weight = np.float64(weight)
-
-    def getWeight(self):
-        return self._weight
-
     def setErrors(self, errors):
         errors = ma.masked_invalid(errors)
         n_data = self.len(all=True)
@@ -162,7 +328,7 @@ class RedshiftData(BaseData):
                 "but got shape {:s}".format(str(errors.shape)))
         self._dn = errors
         # synchronize the individual masks
-        self._update_masks()
+        self._updateMasks()
 
     def setEdges(self, edges):
         n_bins = self.len(all=True) + 1
@@ -180,9 +346,9 @@ class RedshiftData(BaseData):
             raise AttributeError("redshift bin edges not set")
         return has_edges
 
-    def getEdges(self):
+    def edges(self, **kwargs):
         self.hasEdges(require=True)
-        return self._edges
+        return self._edges.copy()
 
     def setSamples(self, samples):
         samples = ma.masked_invalid(samples)
@@ -235,15 +401,12 @@ class RedshiftData(BaseData):
                 "but got shape {:s}".format(covmat.shape))
         # do some basic checks with the diagonal
         self._covmat = covmat
-        self._update_masks()
+        self._updateMasks()
         cov_diag = np.diag(self._covmat)
-        if np.all(self.dn() == 1.0):
-            self.setErrors(np.sqrt(cov_diag))
-        else:
-            variance = self.dn() ** 2
-            if not np.isclose(cov_diag.compressed(), variance).all():
-                raise ValueError(
-                    "variance and covariance matrix diagonal do not match")
+        variance = self.dn() ** 2
+        if not np.isclose(cov_diag.compressed(), variance).all():
+            raise ValueError(
+                "variance and covariance matrix diagonal do not match")
 
     def hasCovMat(self, require=False):
         has_covmat = hasattr(self, "_covmat")
@@ -298,7 +461,7 @@ class RedshiftData(BaseData):
             return "stderr"
 
     def getSample(self, idx=None, method=None):
-        method = self._parse_method(method)
+        method = self._parseMethod(method)
         if method == "samples" and idx is not None:
             n_samples = self.getSampleNo()
             if idx >= n_samples:
@@ -317,8 +480,6 @@ class RedshiftData(BaseData):
         new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
         if self.hasCovMat():
             new.setCovMat(self.getCovMat(all=True))
-        if self.hasEdges():
-            new.setEdges(self.getEdges())
         return new
 
     def norm(self):
@@ -362,7 +523,7 @@ class RedshiftData(BaseData):
         else:
             return median
 
-    def plotPoints(self, ax=None, z_offset=0.0, mark_edges=True, **kwargs):
+    def plot(self, ax=None, z_offset=0.0, **kwargs):
         if ax is None:
             fig = Figure(1)
             ax = fig.axes[0]
@@ -370,37 +531,64 @@ class RedshiftData(BaseData):
             fig = plt.gcf()
         plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
         plot_kwargs.update(kwargs)
-        if mark_edges and self.hasEdges():
-            edges = self.getEdges()
-            ax.plot(
-                edges, np.zeros_like(edges),
-                color=plot_kwargs["color"], marker="|", ls="none")
         ax.errorbar(
             self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
         return fig
 
-    def plotHist(self, ax=None, **kwargs):
-        if ax is None:
-            fig = Figure(1)
-            ax = fig.axes[0]
+
+class RedshiftHistogramBinned(BaseBinned):
+
+    def __init__(self, bins, master):
+        self._data = [*bins, master]
+        for data in self._data:
+            if not isinstance(data, RedshiftHistogram):
+                raise TypeError(
+                    "'bins' and 'master' must be of type 'RedshiftHistogram'")
+
+    def len(self, concat=False, **kwargs):
+        return self._collect("len", callback=sum, apply=concat)
+
+    def edges(self, concat=False, **kwargs):
+        return self._collect("edges", callback=np.concatenate, apply=concat)
+
+    def counts(self, concat=False, **kwargs):
+        return self._collect("counts", callback=np.concatenate, apply=concat)
+
+    def centers(self, concat=False, **kwargs):
+        return self._collect("centers", callback=np.concatenate, apply=concat)
+
+    def pdf(self, z, concat=False, **kwargs):
+        pdfs = []
+        for bin_z, data in zip(z, self._data):
+            pdfs.append(data.pdf(bin_z))
+        if concat:
+            return np.concatenate(pdfs)
         else:
-            fig = plt.gcf()
-        pdf = self.pdf(all=True)
-        y = np.append(pdf[0], pdf)
-        fill_kwargs = {}
-        if "color" not in kwargs:
-            kwargs["color"] = "0.6"
-        if "label" in kwargs:
-            fill_kwargs["label"] = kwargs.pop("label")
-        fill = ax.fill_between(
-            self.getEdges(), 0.0, np.nan_to_num(y), 
-            step="pre", alpha=0.3, **fill_kwargs)
-        lines = ax.step(self.getEdges(), y, **kwargs)
-        fill.set_color(lines[0].get_color())
+            return pdfs
+
+    def cdf(self, z, concat=False, **kwargs):
+        cdfs = []
+        for bin_z, data in zip(z, self._data):
+            cdfs.append(data.cdf(bin_z))
+        if concat:
+            return np.concatenate(cdfs)
+        else:
+            return cdfs
+
+    def mean(self, **kwargs):
+        return [data.mean() for data in self._data]
+
+    def median(self, **kwargs):
+        return [data.median() for data in self._data]
+
+    def plot(self, fig=None, **kwargs):
+        fig, axes = self._getFig(fig)
+        for i, ax in enumerate(axes.flatten()):
+            self._data[i].plot(ax=ax, **kwargs)
         return fig
 
 
-class RedshiftDataBinned(BaseData):
+class RedshiftDataBinned(BaseData, BaseBinned):
 
     def __init__(self, bins, master):
         self._data = [*bins, master]
@@ -414,13 +602,6 @@ class RedshiftDataBinned(BaseData):
             if not all(n_samples[0] == n for n in n_samples[1:]):
                 raise ValueError(
                     "Number of data samples does not match in input")
-
-    def __len__(self):
-        return len(self._data)
-
-    def _collect(self, attr, *args, callback=None, apply=False):
-        items = [getattr(data, attr)(*args) for data in self._data]
-        return callback(items) if apply else items
 
     def mask(self, concat=False):
         return self._collect("mask", callback=np.concatenate, apply=concat)
@@ -437,32 +618,8 @@ class RedshiftDataBinned(BaseData):
     def dn(self, all=False, concat=False):
         return self._collect("dn", all, callback=np.concatenate, apply=concat)
 
-    def getWeight(self):
-        weights = [data.getWeight() for data in self._data]
-        master = weights.pop()
-        if not np.isclose(sum(weights), master):
-            raise ValueError("bin weights do not add up to master weight")
-        return [w / master for w in [*weights, master]]
-
-    def getEdges(self, concat=False):
-        return self._collect("getEdges", callback=np.concatenate, apply=concat)
-
-    def iterData(self):
-        for data in self._data:
-            yield data
-
-    def iterBins(self):
-        for data in self._data[:-1]:
-            yield data
-
-    def getMaster(self):
-        return self._data[-1]
-
-    def assertEqualZ(self):
-        zs = self.z()
-        ref_z = zs.pop()
-        for z in zs:
-            assert(np.all(z == ref_z))
+    def edges(self, concat=False, **kwargs):
+        return self._collect("edges", callback=np.concatenate, apply=concat)
 
     def hasSamples(self, require=False):
         return all(data.hasSamples(require) for data in self._data)
@@ -492,7 +649,7 @@ class RedshiftDataBinned(BaseData):
         return all(data.hasCovMat(require) for data in self._data)
 
     @staticmethod
-    def _block_matrix(diagonal_blocks, fill_value=0.0):
+    def _blockMatrix(diagonal_blocks, fill_value=0.0):
         shapes = [
             [b.shape[0] for b in diagonal_blocks],
             [b.shape[1] for b in diagonal_blocks]]
@@ -514,15 +671,15 @@ class RedshiftDataBinned(BaseData):
 
     def getCovMat(self, all=False, concat=False):
         return self._collect(
-            "getCovMat", all, callback=self._block_matrix, apply=concat)
+            "getCovMat", all, callback=self._blockMatrix, apply=concat)
 
     def getCorrMat(self, all=False, concat=False):
         return self._collect(
-            "getCorrMat", all, callback=self._block_matrix, apply=concat)
+            "getCorrMat", all, callback=self._blockMatrix, apply=concat)
 
     def getCovMatInv(self, all=False, concat=False):
         return self._collect(
-            "getCovMatInv", all, callback=self._block_matrix, apply=concat)
+            "getCovMatInv", all, callback=self._blockMatrix, apply=concat)
 
     def samplingMethod(self):
         methods = [data.samplingMethod() for data in self._data]
@@ -534,13 +691,10 @@ class RedshiftDataBinned(BaseData):
             return "stderr"
 
     def getSample(self, idx=None, method=None):
-        method = self._parse_method(method)
+        method = self._parseMethod(method)
         samples = [data.getSample(idx, method=method) for data in self._data]
         new = self.__class__(samples[:-1], samples[-1])
         return new
-
-    def norm(self):
-        return [data.norm() for data in self._data]
 
     def pdf(self, all=False, concat=False):
         return self._collect("pdf", all, callback=np.concatenate, apply=concat)
@@ -562,193 +716,10 @@ class RedshiftDataBinned(BaseData):
         else:
             return medians
 
-    def _get_fig(self, fig):
-        if fig is None:
-            fig = Figure(len(self))
-            axes = np.asarray(fig.axes)
-        else:
-            axes = np.asarray(fig.axes)
-        return fig, axes
-
-    def plotPoints(self, fig=None, z_offset=0.0, mark_edges=True, **kwargs):
-        fig, axes = self._get_fig(fig)
+    def plot(self, fig=None, z_offset=0.0, **kwargs):
+        fig, axes = self._getFig(fig)
         # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
-            self._data[i].plotPoints(
-                ax=ax, z_offset=z_offset, mark_edges=mark_edges, **kwargs)
+            self._data[i].plot(
+                ax=ax, z_offset=z_offset, **kwargs)
         return fig
-
-    def plotHist(self, fig=None, **kwargs):
-        fig, axes = self._get_fig(fig)
-        # plot data sets the axes and delete the remaining ones from the grid
-        for i, ax in enumerate(axes.flatten()):
-            self._data[i].plotHist(ax=ax, **kwargs)
-        return fig
-
-
-class FitParameters(object):
-    """
-    Container for best-fit parameters and and samples for correlatin
-    estimation.
-
-    Parameters
-    ----------
-    bestfit : OrderedDict
-        Dictionary of with mapping parameter name -> best-fit model parameter.
-    fitsamples : OrderedDict
-        Dictionary of with mapping parameter name -> fit parameter samples.
-    labels : OrderedDict
-        Dictionary of with mapping parameter name -> math text / TEX label.
-    n_dof : int
-        Degrees of freedom of model fit.
-    chisquare : float
-        Chi squared of model best fit.
-    """
-
-    def __init__(self, bestfit, fitsamples, labels, n_dof, chisquare):
-        assert(type(bestfit) is OrderedDict)
-        self._best = bestfit
-        assert(type(fitsamples) is OrderedDict)
-        self._samples = fitsamples
-        self._n_samples = len(self._samples.values().__iter__().__next__())
-        assert(type(labels) is OrderedDict)
-        self.names = labels
-        self._ndof = n_dof
-        self._chisquare = chisquare
-
-    def __len__(self):
-        return self._n_samples
-
-    def __str__(self):
-        max_width = max(len(n) for n in self.getParamNames())
-        chi_str = "χ² dof."
-        max_width = max(max_width, len(chi_str))
-        string = "{:>{w}} = {:.3f}\n".format(
-            chi_str, self.chiSquareReduced(), w=max_width)
-        iterator = zip(
-            self.getParamNames(), self.paramBest(), self.paramError())
-        for i, (name, value, error) in enumerate(iterator):
-            if i > 12:
-                string += (" " * max_width) + "...     \n"
-                break
-            string += "{:>{w}} = {:}\n".format(
-                name, format_variable(value, error, precision=3),
-                w=max_width)
-        return string.strip("\n")
-
-    def __repr__(self):
-        max_width = max(len(n) for n in self.getParamNames())
-        string = "<%s object at %s,\n" % (
-            self.__class__.__name__, hex(id(self)))
-        for line in str(self).split("\n"):
-            string += " %s\n" % line
-        return string.strip("\n") + ">"
-
-    def getParamNo(self):
-        """
-        Number of free model parameters.
-        """
-        return len(self._best)
-
-    def getParamNames(self, label=False):
-        """
-        Names of the free model parameters.
-        """
-        if label:
-            return self.names.values()
-        else:
-            return self.names.keys()
-
-    def paramSamples(self, name=None):
-        """
-        Directly get the fit parameter samples.
-        """
-        if name is None:
-            return np.transpose(list(self._samples.values()))
-        else:
-            return self._samples[name]
-
-    def paramBest(self, name=None):
-        """
-        Get the best fit parameters.
-        """
-        if name is None:
-            return np.asarray(list(self._best.values()))
-        else:
-            return self._best[name]
-
-    def paramCovar(self):
-        """
-        Get the best fit parameter covariance matrix.
-        """
-        cov = np.cov(self.paramSamples(), rowvar=False)
-        return np.atleast_2d(cov)
-
-    def paramError(self, name=None):
-        """
-        Get the best fit parameter errors.
-        """
-        if name is None:
-            return np.std(self.paramSamples(), axis=0)
-        else:
-            return np.std(self.paramSamples(name))
-
-    def paramCorr(self):
-        """
-        Get the best fit parameter correlation matrix.
-        """
-        errors = self.paramError()
-        covar = self.paramCovar()
-        corr = np.matmul(
-            np.matmul(np.diag(1.0 / errors), covar), np.diag(1.0 / errors))
-        return corr
-
-    def Ndof(self):
-        return self._ndof
-
-    def chiSquare(self):
-        return self._chisquare
-    
-    def chiSquareReduced(self):
-        return self.chiSquare() / self.Ndof()
-
-    def paramAsTEX(
-            self, param_name, precision=3, notation="auto", use_siunitx=False):
-        """
-        TODO
-        """
-        precision = max(0, precision)
-        if param_name not in self.names:
-            raise KeyError("parameter with name '%s' does not exist")
-        # format to TEX, decide automatically which formatter to use
-        expression = format_variable(
-            self.paramBest(param_name), self.paramError(param_name),
-            precision, TEX=True, notation=notation, use_siunitx=use_siunitx)
-        TEXstring = "${:} = {:}$".format(
-            self.names[param_name].strip("$"), expression.strip("$"))
-        return TEXstring
-
-    def plotSamples(self, names=None):
-        """
-        Plot the distribution of the fit parameter samples in a triangle plot
-        with corner.corner.
-        """
-        if names is None:
-            samples = self.paramSamples()
-            labels = list(self.names.values())
-        else:
-            samples = []
-            labels = []
-            for name in names:
-                samples.append(self.paramSamples(name))
-                labels.append(self.names[name])
-            samples = np.transpose(samples)
-        fig = corner(samples, labels=labels, show_titles=True)
-        return fig
-
-    def plotCorr(self):
-        """
-        Plot the correlation matrix.
-        """
-        im = plt.matshow(self.paramCorr(), vmin=-1, vmax=1, cmap="bwr")
-        plt.colorbar(im)
