@@ -44,6 +44,7 @@ class FitParameter:
 class BaseModel(object):
 
     _paramlist = None
+    _expect_z = "z"
 
     def getParams(self):
         return self._paramlist
@@ -86,7 +87,7 @@ class BaseModel(object):
 
     def getZ(self, data):
         try:
-            return getattr(data, self.expect_z)(all=False, concat=False)
+            return getattr(data, self._expect_z)(all=False, concat=False)
         except AttributeError:
             return data
 
@@ -101,10 +102,10 @@ class BaseModel(object):
         if hasattr(z_data, "centers"):
             z = z_data.centers()
         elif hasattr(z_data, "z"):
-            z = z_data.z(all=(self.expect_z == "edges"))
+            z = z_data.z(all=(self._expect_z == "edges"))
         else:
             z = copy(z_data)
-        if self.expect_z == "edges":
+        if self._expect_z == "edges":
             if hasattr(z_data, "edges"):
                 z_model = z_data.edges()
             else:
@@ -182,8 +183,6 @@ class BaseModelBinned(BaseModel):
 
 class PowerLawBias(BaseModel):
 
-    expect_z = "z"
-
     def __init__(self):
         param = FitParameter("alpha", r"$\alpha$")
         param.setGuess(0.0)
@@ -197,8 +196,6 @@ class PowerLawBias(BaseModel):
 
 class BiasFitModel(BaseModel):
 
-    expect_z = "z"
-
     def __init__(self, binned_data, weights, bias_model):
         self._data = binned_data
         self._data.assertEqual(binned_data.z())
@@ -206,15 +203,43 @@ class BiasFitModel(BaseModel):
         self._weights = self._parseWeights(weights)
         self._paramlist = bias_model.getParams()
 
-    def __call__(self, z_data, *params):
-        z = self.getZ(z_data)
+    def getData(self):
+        return self._data.getMaster()
+
+    def evaluate(self, params):
+        # call the model
+        z = self._data.getMaster().z()
+        try:
+            param_samples = params.paramSamples()
+            n = self(*params.paramBest())
+            samples = np.empty((len(param_samples), len(n)))
+            for i, param in enumerate(param_samples):
+                samples[i] = self(*param, sample_idx=i)
+            dn = samples.std(axis=0)
+        except AttributeError:
+            n = self(*params)
+            samples = None
+            dn = np.zeros_like(n)
+        # pack the data as a RedshiftData container
+        container = RedshiftData(z, n, dn)
+        if samples is not None:
+            container.setSamples(samples)
+        return container
+
+    def __call__(self, *params, sample_idx=None):
+        # get the internal data, ignoring any input
+        if sample_idx is None:
+            data = self._data
+        else:
+            data = self._data.getSample(sample_idx)
+        master = data.getMaster()
         # evaluate the given bias model
-        bias = self._bias_model(z, *params)
+        bias = self._bias_model(master.z(), *params)
         # compute the original of the data sample
-        norm = np.trapz(self._data.getMaster().n() / bias, x=z)
+        norm = np.trapz(master.n() / bias, x=master.z())
         # apply the bias correction to the bins and renormalize them as well
         bin_nz_weighted = []
-        for zbin, weight in zip(self._data.iterBins(), self._weights):
+        for zbin, weight in zip(data.iterBins(), self._weights):
             nz_debiased = zbin.n() / bias
             nz_debiased /= np.trapz(nz_debiased, x=zbin.z())
             bin_nz_weighted.append(nz_debiased * weight)
@@ -224,7 +249,7 @@ class BiasFitModel(BaseModel):
 
 class ShiftModel(BaseModel):
 
-    expect_z = "edges"
+    _expect_z = "edges"
 
     def __init__(self, hist):
         self._model_hist = hist
@@ -253,7 +278,7 @@ class ShiftModel(BaseModel):
 
 class ShiftModelBinned(BaseModelBinned):
 
-    expect_z = "edges"
+    _expect_z = "edges"
 
     def __init__(self, shift_models, bias_model=None):
         self._models = shift_models
@@ -295,8 +320,6 @@ class ShiftModelBinned(BaseModelBinned):
 
 
 class CombModel(BaseModel):
-
-    expect_z = "z"
 
     def __init__(self, n_param, z0, dz, smoothing=1.0):
         self._mus, self._sigmas = self._distributeGaussians(
@@ -385,8 +408,6 @@ class LogGaussianComb(CombModel):
 
 
 class CombModelBinned(BaseModelBinned):
-
-    expect_z = "z"
 
     def __init__(self, comb_models, weights, bias_model=None):
         self._models = comb_models
