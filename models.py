@@ -212,12 +212,14 @@ class BiasFitModel(BaseModel):
         try:
             param_samples = params.paramSamples()
             n = self(*params.paramBest())
-            samples = np.empty((len(param_samples), len(n)))
+            samples = np.full((len(param_samples), len(n)), np.nan)
             for i, param in enumerate(param_samples):
-                samples[i] = self(*param, sample_idx=i)
+                sample = self._data.getSample(i)
+                mask = ~sample.getMaster().mask()
+                samples[i][mask] = self(*param, sample_data=sample)
             dn = samples.std(axis=0)
         except AttributeError:
-            n = self(*params)
+            n = self(*params, sample_data=None)
             samples = None
             dn = np.zeros_like(n)
         # pack the data as a RedshiftData container
@@ -226,12 +228,18 @@ class BiasFitModel(BaseModel):
             container.setSamples(samples)
         return container
 
-    def __call__(self, *params, sample_idx=None):
+    def _optimizerCall(self, sample_idx, *params):
+        sample_data = self._data.getSample(sample_idx)
+        data_n = sample_data.getMaster().n()
+        model_n = self(*params, sample_data=sample_data)
+        return model_n - data_n
+
+    def __call__(self, *params, sample_data=None):
         # get the internal data, ignoring any input
-        if sample_idx is None:
+        if sample_data is None:
             data = self._data
         else:
-            data = self._data.getSample(sample_idx)
+            data = sample_data
         master = data.getMaster()
         # evaluate the given bias model
         bias = self._bias_model(master.z(), *params)
