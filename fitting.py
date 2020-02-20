@@ -1,33 +1,20 @@
 import multiprocessing
-import os
+import warnings
 from collections import OrderedDict
 from functools import partial
 
 import numpy as np
+import pandas as pd
+from corner import corner
+from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit
 
-from .data import RedshiftData
+from .data import Base
 from .models import BaseModel
+from .utils import format_variable
 
 
 class FitResult(object):
-    """
-    Container for best-fit parameters and and samples for correlatin
-    estimation.
-
-    Parameters
-    ----------
-    bestfit : OrderedDict
-        Dictionary of with mapping parameter name -> best-fit model parameter.
-    fitsamples : OrderedDict
-        Dictionary of with mapping parameter name -> fit parameter samples.
-    labels : OrderedDict
-        Dictionary of with mapping parameter name -> math text / TEX label.
-    n_dof : int
-        Degrees of freedom of model fit.
-    chisquare : float
-        Chi squared of model best fit.
-    """
 
     def __init__(self, bestfit, fitsamples, labels, n_dof, chisquare):
         assert(type(bestfit) is OrderedDict)
@@ -127,14 +114,14 @@ class FitResult(object):
             np.matmul(np.diag(1.0 / errors), covar), np.diag(1.0 / errors))
         return corr
 
-    def Ndof(self):
+    def nDoF(self):
         return self._ndof
 
     def chiSquare(self):
         return self._chisquare
     
     def chiSquareReduced(self):
-        return self.chiSquare() / self.Ndof()
+        return self.chiSquare() / self.nDoF()
 
     def paramAsTEX(
             self, param_name, precision=3, notation="auto", use_siunitx=False):
@@ -180,133 +167,109 @@ class FitResult(object):
 
 class Optimizer(object):
 
-    def __init__(self, data, model):
-        assert(isinstance(data, RedshiftData))
-        self.data = data
+    def __init__(self, model, data=None):
         assert(isinstance(model, BaseModel))
-        self.model = model
-
-    def chiSquared(self, pbest):
-        # compute the chi squared
-        diff_data_model = self.model(self.data.z, *pbest) - self.data.n
+        self._model = model
         try:
-            chisq = np.matmul(
-                diff_data_model,
-                np.matmul(self.model.getInverseCovariance(), diff_data_model))
+            self._data = self._model.getData()
+            self._data_internal = True
+            if data is not None:
+                raise ValueError(
+                    "'data' argument is given but model provides data")
         except AttributeError:
-            chisq = np.sum((diff_data_model / self.data.dn)**2)
+            if data is None:
+                raise ValueError(
+                    "'data' argument is not given and model does not provides "
+                    "data")
+            assert(isinstance(data, Base))
+            self._data = data
+            self._data_internal = False
+
+    def getData(self):
+        return self._data
+
+    def getModel(self):
+        return self._model
+
+    def chiSquared(self, params, ndof=False):
+        # compute the chi squared
+        if self._data_internal:
+            call_arg = None
+        else:
+            call_arg = self._data
+        model = self._model._optimizerCall(call_arg, *params)  # concatenated
+        data = self._data.n(concat=True)
+        diff_data_model = model - data
+        try:
+            invmat = self._data.getCovMatInv(concat=True)
+            chisq = np.matmul(
+                diff_data_model, np.matmul(invmat, diff_data_model))
+        except AttributeError:
+            errors = self._data.dn(concat=True)
+            chisq = np.sum((diff_data_model / errors)**2)
+        if ndof:
+            chisq /= self.nDoF()
         return chisq
 
-    def Ndof(self):
-        """
-        Degrees of freedom for model fit.
-        """
-        return len(self.data) - self.model.getParamNo()
-
-    def optimize(self, **kwargs):
-        raise NotImplementedError
+    def nDoF(self):
+        n_data = self._data.len(all=False, concat=True)
+        n_param = self._model.getParamNo()
+        return n_data - n_param
 
 
 class CurveFit(Optimizer):
-    """
-    A wrapper for scipy.optmize.curve_fit to fit a comb model to a redshift
-    distribution with a bootstrap estimate of the fit parameter covariance.
-    Automatically includes the data covariance if provided in the input data
-    container.
 
-    Parameters
-    ----------
-    data : RedshiftData
-        Input redshift distribution.
-    model : BaseModel
-        Gaussian comb model with give number of components.
-    """
+    def __init__(self, model, data=None):
+        super().__init__(model, data)
 
-    def __init__(self, data, model):
-        super().__init__(data, model)
-
-    def _curve_fit_wrapper(self, *args, resample=False, **kwargs):
-        """
-        Internal wrapper for scipy.optimize.curve_fit to automatically parse
-        fit data and model. The data can be resampled prior to fitting.
-
-        Parameters
-        ----------
-        *args : objects
-            Placeholder for dummy variables.
-        resample : bool
-            Whether the data should be resampled.
-        **kwargs : keyword arguments
-            Arugments parsed on to scipy.optimize.curve_fit
-
-        Returns
-        -------
-        popt : array_like
-            Best fit model parameters.
-        """
-        if resample:
-            if self.data.reals is not None:
-                fit_data = self.data.resample(reals_idx=args[0])
-            else:
-                np.random.seed(  # reseed the RNG state for each thread
-                    int.from_bytes(os.urandom(4), byteorder="little"))
-                fit_data = self.data.resample()
+    def _curve_fit_wrapper(self, *args, draw_sample=False, **kwargs):
+        # get the data sample to fit
+        if draw_sample:
+            fit_data = self._data.getSample(args[0])  # the sample index
         else:
-            fit_data = self.data
+            fit_data = self._data  # fiducial fit
         # get the covariance matrix if possible
-        try:
-            sigma = fit_data.getCovariance()
-        except AttributeError:
-            sigma = fit_data.dn
-        # replace NaNs
-        not_finite = ~np.isfinite(fit_data.n)
-        if np.any(not_finite):
-            fit_data.n[not_finite] = self.data.n[not_finite]
+        if fit_data.hasCovMat():
+            sigma = fit_data.getCovMat(concat=True)
+        else:
+            sigma = fit_data.dn(concat=True)
+        # get the correct arguments for _optimizerCall()
+        if self._data_internal:
+            call_arg = args[0] if draw_sample else None
+            data_n = np.zeros(len(sigma))
+        else:
+            call_arg = fit_data
+            data_n = fit_data.n(concat=True)
         # run the optimizer
-        popt, _ = curve_fit(
-            self.model, fit_data.z, fit_data.n, sigma=sigma,
-            p0=self.model.guess(), bounds=self.model.bounds(), **kwargs)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            popt, _ = curve_fit(
+                self._model._optimizerCall,
+                call_arg, data_n, sigma=sigma,
+                p0=self._model.getParamGuess(),
+                bounds=self._model.getParamBounds(pairwise=False),
+                **kwargs)
         return popt
 
     def optimize(self, n_samples=1000, threads=None, **kwargs):
-        """
-        Computes the best fit parameters and their covariance from either
-        data vector realisations or resampling data errors/covariance.
-
-        Parameters
-        ----------
-        resample : bool
-            Whether the data should be resampled.
-        n_samples : int
-            Number of resampling steps from data used to estimate the
-            covariance (no effect if input data have realisations).
-        threads : int
-            Number of threads used for processing (defaults to all threads).
-        **kwargs : keyword arguments
-            Arugments parsed on to scipy.optimize.curve_fit
-
-        Returns
-        -------
-        bestfit : FitParameters
-            Parameter best-fit container.
-        """
         label_dict = OrderedDict(zip(
-            self.model.getParamNames(label=False),
-            self.model.getParamNames(label=True)))
-        guess = self.model.guess()
-        bounds = self.model.bounds()
+            self._model.getParamNames(),
+            self._model.getParamlabels()))
+        guess = self._model.getParamGuess()
+        bounds = self._model.getParamBounds()
         # get the best fit parameters
         pbest = self._curve_fit_wrapper()
+        self._model.setParamGuess(pbest)
         pbest_dict = OrderedDict(zip(label_dict.keys(), pbest))
         # resample data points for each fit to estimate parameter covariance
         if threads is None:
             threads = multiprocessing.cpu_count()
-        if self.data.reals is not None:
-            n_samples = self.data.getNoRealisations()
+        if self._data.hasSamples():
+            n_samples = self._data.getSampleNo()
         threads = min(threads, n_samples)
         chunksize = n_samples // threads + 1  # optmizes the workload
         threaded_fit = partial(
-            self._curve_fit_wrapper, resample=True, **kwargs)
+            self._curve_fit_wrapper, draw_sample=True, **kwargs)
         # run in parallel threads
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
@@ -314,7 +277,7 @@ class CurveFit(Optimizer):
         param_samples_dict = OrderedDict(
             zip(label_dict.keys(), np.transpose(param_samples)))
         # collect the best fit data
-        bestfit = FitParameters(
+        bestfit = FitResult(
             pbest_dict, param_samples_dict, label_dict,
-            self.Ndof(), self.chiSquared(pbest))
+            self.nDoF(), self.chiSquared(pbest))
         return bestfit
