@@ -1,18 +1,16 @@
+import os
 from collections import OrderedDict
 from copy import copy
-import os
 
 import numpy as np
 import numpy.ma as ma
-import pandas as pd
-from corner import corner
 from matplotlib import cm as colormaps
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.integrate import cumtrapz
 from scipy.interpolate import interp1d
 
-from .utils import Figure, format_variable
+from .utils import Figure
 
 
 DEFAULT_EXT_HIST = ".hist"
@@ -81,8 +79,14 @@ class BaseBinned(Base):
         for data in self._data[:-1]:
             yield data
 
+    def getBins(self):
+        return self._data[:-1]
+
     def getMaster(self):
         return self._data[-1]
+
+    def getData(self):
+        return self._data
 
     def norm(self):
         return [data.norm() for data in self._data]
@@ -480,6 +484,8 @@ class RedshiftData(BaseData):
         new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
         if self.hasCovMat():
             new.setCovMat(self.getCovMat(all=True))
+        if self.hasEdges():
+            new.setEdges(self.edges())
         return new
 
     def norm(self):
@@ -523,16 +529,23 @@ class RedshiftData(BaseData):
         else:
             return median
 
-    def plot(self, ax=None, z_offset=0.0, **kwargs):
+    def plot(self, ax=None, lines=False, z_offset=0.0, **kwargs):
         if ax is None:
             fig = Figure(1)
             ax = fig.axes[0]
         else:
             fig = plt.gcf()
-        plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
-        plot_kwargs.update(kwargs)
-        ax.errorbar(
-            self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
+        if lines:
+            line = ax.plot(self.z(), self.n(), **kwargs)[0]
+            if np.any(self.dn() != 0.0):
+                ax.fill_between(
+                    self.z(), self.n() - self.dn(), self.n() + self.dn(),
+                    alpha=0.3, color=line.get_color())
+        else:
+            plot_kwargs = {"color": "k", "marker": ".", "ls": "none"}
+            plot_kwargs.update(kwargs)
+            ax.errorbar(
+                self.z() + z_offset, self.n(), yerr=self.dn(), **plot_kwargs)
         return fig
 
 
@@ -716,10 +729,9 @@ class RedshiftDataBinned(BaseData, BaseBinned):
         else:
             return medians
 
-    def plot(self, fig=None, z_offset=0.0, **kwargs):
+    def plot(self, fig=None, lines=False, z_offset=0.0, **kwargs):
         fig, axes = self._getFig(fig)
-        # plot data sets the axes and delete the remaining ones from the grid
         for i, ax in enumerate(axes.flatten()):
             self._data[i].plot(
-                ax=ax, z_offset=z_offset, **kwargs)
+                ax=ax, lines=lines, z_offset=z_offset, **kwargs)
         return fig
