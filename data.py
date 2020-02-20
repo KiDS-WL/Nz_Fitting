@@ -240,7 +240,7 @@ class RedshiftData(BaseData):
             raise ValueError(
                 "length of z ({:d}), ".format(len(z)) +
                 "n ({:d}) and ".format(len(n)) +
-                "dn ({:d}}) do not match".format(len(dn)))
+                "dn ({:d}) do not match".format(len(dn)))
         # synchronize the individual masks
         self._updateMasks()
 
