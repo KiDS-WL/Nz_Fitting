@@ -167,23 +167,11 @@ class FitResult(object):
 
 class Optimizer(object):
 
-    def __init__(self, model, data=None):
+    def __init__(self, model, data):
         assert(isinstance(model, BaseModel))
         self._model = model
-        try:
-            self._data = self._model.getData()
-            self._data_internal = True
-            if data is not None:
-                raise ValueError(
-                    "'data' argument is given but model provides data")
-        except AttributeError:
-            if data is None:
-                raise ValueError(
-                    "'data' argument is not given and model does not provides "
-                    "data")
-            assert(isinstance(data, Base))
-            self._data = data
-            self._data_internal = False
+        assert(isinstance(data, Base))
+        self._data = data
 
     def getData(self):
         return self._data
@@ -192,12 +180,7 @@ class Optimizer(object):
         return self._model
 
     def chiSquared(self, params, ndof=False):
-        # compute the chi squared
-        if self._data_internal:
-            call_arg = None
-        else:
-            call_arg = self._data
-        model = self._model._optimizerCall(call_arg, *params)  # concatenated
+        model = self._model._optimizerCall(self._data, *params)  # concatenated
         data = self._data.n(concat=True)
         diff_data_model = model - data
         try:
@@ -219,7 +202,7 @@ class Optimizer(object):
 
 class CurveFit(Optimizer):
 
-    def __init__(self, model, data=None):
+    def __init__(self, model, data):
         super().__init__(model, data)
 
     def _curve_fit_wrapper(self, *args, draw_sample=False, **kwargs):
@@ -233,25 +216,18 @@ class CurveFit(Optimizer):
             sigma = fit_data.getCovMat(concat=True)
         else:
             sigma = fit_data.dn(concat=True)
-        # get the correct arguments for _optimizerCall()
-        if self._data_internal:
-            call_arg = args[0] if draw_sample else None
-            data_n = np.zeros(len(sigma))
-        else:
-            call_arg = fit_data
-            data_n = fit_data.n(concat=True)
         # run the optimizer
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             popt, _ = curve_fit(
                 self._model._optimizerCall,
-                call_arg, data_n, sigma=sigma,
+                fit_data, fit_data.n(concat=True), sigma=sigma,
                 p0=self._model.getParamGuess(),
                 bounds=self._model.getParamBounds(pairwise=False),
                 **kwargs)
         return popt
 
-    def optimize(self, n_samples=1000, threads=None, **kwargs):
+    def optimize(self, n_samples=None, threads=None, **kwargs):
         label_dict = OrderedDict(zip(
             self._model.getParamNames(),
             self._model.getParamlabels()))
@@ -264,8 +240,14 @@ class CurveFit(Optimizer):
         # resample data points for each fit to estimate parameter covariance
         if threads is None:
             threads = multiprocessing.cpu_count()
+        # get the number of samples to use
         if self._data.hasSamples():
-            n_samples = self._data.getSampleNo()
+            if n_samples is None:
+                n_samples = self._data.getSampleNo()
+            else:
+                n_samples = min(n_samples, self._data.getSampleNo())
+        else:
+            n_samples = 1000  # default value
         threads = min(threads, n_samples)
         chunksize = n_samples // threads + 1  # optmizes the workload
         threaded_fit = partial(
