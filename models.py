@@ -194,6 +194,7 @@ class PowerLawBias(BaseModel):
         return (1.0 + z) ** params[0]
 
 
+"""
 class BiasFitModel(BaseModel):
 
     def __init__(self, binned_data, weights, bias_model):
@@ -254,6 +255,8 @@ class BiasFitModel(BaseModel):
         # compute the weighted sum of the bias corrected bins
         nz_full_model = bias * norm * np.sum(bin_nz_weighted, axis=0)
         return nz_full_model
+"""
+
 
 class ShiftModel(BaseModel):
 
