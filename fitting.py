@@ -184,7 +184,7 @@ class Optimizer(object):
         data = self._data.n(concat=True)
         diff_data_model = model - data
         try:
-            invmat = self._data.getCovMatInv(concat=True)
+            invmat = self._data.getCovMatInv()
             chisq = np.matmul(
                 diff_data_model, np.matmul(invmat, diff_data_model))
         except AttributeError:
@@ -213,7 +213,7 @@ class CurveFit(Optimizer):
             fit_data = self._data  # fiducial fit
         # get the covariance matrix if possible
         if fit_data.hasCovMat():
-            sigma = fit_data.getCovMat(concat=True)
+            sigma = fit_data.getCovMat()
         else:
             sigma = fit_data.dn(concat=True)
         # run the optimizer

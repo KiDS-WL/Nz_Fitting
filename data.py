@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections import OrderedDict
 from copy import copy
 
@@ -42,10 +43,82 @@ class BaseData(Base):
         for idx in range(limit):
             yield self.getSample(idx)
 
+    @staticmethod
+    def _warnCovMat(message, handle="warn"):
+        assert(handle in ("print", "warn", "error", "ignore"))
+        if handle == "error":
+            raise ValueError(message)
+        elif handle == "warn":
+            warnings.warn(message)
+        elif handle == "print":
+            print("WARNING: " + message)
+
+    def setCovMat(self, covmat, check=True):
+        covmat = ma.masked_invalid(covmat)
+        # check whether data and covariance dimensions match
+        n_data = self.len(all=True, concat=True)
+        if covmat.shape != (n_data, n_data):
+            raise ValueError(
+                "expected covariance matrix of shape " +
+                "({n:d}, {n:d}), ".format(n=n_data) + 
+                "but got shape {:s}".format(covmat.shape))
+        if check:
+            # check if it is positive definite
+            mask = ~self.mask(concat=True) & ~np.diag(covmat.mask)
+            n_data = np.count_nonzero(mask)
+            new_mask_2D = np.ix_(mask, mask)
+            np.linalg.cholesky(covmat[new_mask_2D])
+            # do some basic checks with the diagonal
+            cov_diag = np.diag(covmat)[mask]
+            variance = self.dn(all=True)[mask] ** 2
+            if not np.isclose(cov_diag, variance).all():
+                raise ValueError(
+                    "variance and covariance matrix diagonal do not match")
+            self._covmat = covmat
+            self._updateMasks()
+
+    def getCovMat(self, all=False, **kwargs):
+        self.hasCovMat(require=True)
+        if all:
+            covmat = self._covmat.filled(np.nan)
+        else:
+            n_good = self.len(concat=True)
+            covmat = self._covmat.compressed().reshape((n_good, n_good))
+        return covmat
+
+    def getCorrMat(self, all=False, **kwargs):
+        covmat = self.getCovMat(all=False)
+        # normalize the matrix elements
+        norm = np.sqrt(np.diag(covmat))
+        corrmat = covmat / np.outer(norm, norm)
+        if all:
+            # get the bad columns and merge them with the correlation matrix
+            corrmat_full = self._covmat.copy()
+            corrmat_full[corrmat_full != ma.masked] = corrmat.flatten()
+            return corrmat_full.filled(np.nan)
+        else:
+            return corrmat
+
+    def getCovMatInv(self, all=False, **kwargs):
+        if not hasattr(self, "_covmat_inv"):
+            # compute the inverse of the covariance matrix with good columns
+            covmat_good = self.getCovMat(all=False)
+            invmat_good = np.linalg.inv(covmat_good)
+            # get the bad columns and merge them with the inverse matrix
+            invmat = self._covmat.copy()
+            invmat[invmat != ma.masked] = invmat_good.flatten()
+            self._invmat = invmat
+        if all:
+            invmat = self._invmat.filled(np.nan)
+        else:
+            n_good = self.len(concat=True)
+            invmat = self._invmat.compressed().reshape((n_good, n_good))
+        return invmat
+
     def plotCorrMat(self, all=True, ax=None, **kwargs):
         if ax is None:
             ax = plt.gca()
-        corrmat = self.getCorrMat(all=all, concat=True)
+        corrmat = self.getCorrMat(all=all, **kwargs)
         # create space for a new axis hosting the color map
         divider = make_axes_locatable(ax)
         cax = divider.append_axes('right', size='5%', pad=0.05)
@@ -372,7 +445,12 @@ class RedshiftData(BaseData):
         self.setErrors(samples.std(axis=0))
         # set the covariance matrix
         covmat = ma.cov(self._samples, ddof=0, rowvar=False)
-        self.setCovMat(covmat)
+        try:
+            self.setCovMat(covmat)
+        except np.linalg.LinAlgError:
+            self._warnCovMat(
+                "automatically estimated covariance matrix is not positive " +
+                "definite")
 
     def hasSamples(self, require=False):
         has_samples = hasattr(self, "_samples")
@@ -394,67 +472,11 @@ class RedshiftData(BaseData):
         self.hasSamples(require=True)
         return len(self._samples)
 
-    def setCovMat(self, covmat):
-        covmat = ma.masked_invalid(covmat)
-        # check whether data and covariance dimensions match
-        n_data = self.len(all=True)
-        if covmat.shape != (n_data, n_data):
-            raise ValueError(
-                "expected covariance matrix of shape " +
-                "({n:d}, {n:d}), ".format(n=n_data) + 
-                "but got shape {:s}".format(covmat.shape))
-        # do some basic checks with the diagonal
-        self._covmat = covmat
-        self._updateMasks()
-        cov_diag = np.diag(self._covmat)
-        variance = self.dn() ** 2
-        if not np.isclose(cov_diag.compressed(), variance).all():
-            raise ValueError(
-                "variance and covariance matrix diagonal do not match")
-
     def hasCovMat(self, require=False):
         has_covmat = hasattr(self, "_covmat")
         if require and not has_covmat:
             raise AttributeError("covariance matrix not set")
         return has_covmat
-
-    def getCovMat(self, all=False, **kwargs):
-        self.hasCovMat(require=True)
-        if all:
-            covmat = self._covmat.filled(np.nan)
-        else:
-            n_good = self.len()
-            covmat = self._covmat.compressed().reshape((n_good, n_good))
-        return covmat
-
-    def getCorrMat(self, all=False, **kwargs):
-        covmat = self.getCovMat(all=False)
-        # normalize the matrix elements
-        norm = np.sqrt(np.diag(covmat))
-        corrmat = covmat / np.outer(norm, norm)
-        if all:
-            # get the bad columns and merge them with the correlation matrix
-            corrmat_full = self._covmat.copy()
-            corrmat_full[corrmat_full != ma.masked] = corrmat.flatten()
-            return corrmat_full.filled(np.nan)
-        else:
-            return corrmat
-
-    def getCovMatInv(self, all=False, **kwargs):
-        if not hasattr(self, "_covmat_inv"):
-            # compute the inverse of the covariance matrix with good columns
-            covmat_good = self.getCovMat(all=False)
-            invmat_good = np.linalg.inv(covmat_good)
-            # get the bad columns and merge them with the inverse matrix
-            invmat = self._covmat.copy()
-            invmat[invmat != ma.masked] = invmat_good.flatten()
-            self._invmat = invmat
-        if all:
-            invmat = self._invmat.filled(np.nan)
-        else:
-            n_good = self.len()
-            invmat = self._invmat.compressed().reshape((n_good, n_good))
-        return invmat
 
     def samplingMethod(self):
         if self.hasSamples():
@@ -483,7 +505,7 @@ class RedshiftData(BaseData):
                     self.n(all=False), self.dn(all=False))
         new = self.__class__(self.z(all=True), sample.data, self.dn(all=True))
         if self.hasCovMat():
-            new.setCovMat(self.getCovMat(all=True))
+            new.setCovMat(self.getCovMat(all=True), check=False)
         if self.hasEdges():
             new.setEdges(self.edges())
         return new
@@ -609,12 +631,24 @@ class RedshiftDataBinned(BaseData, BaseBinned):
             if not isinstance(data, RedshiftData):
                 raise TypeError(
                     "'bins' and 'master' must be of type 'RedshiftData'")
-        # check same number of samples
         if self.hasSamples():
+            # check same number of samples
             n_samples = [data.getSampleNo() for data in self._data]
             if not all(n_samples[0] == n for n in n_samples[1:]):
                 raise ValueError(
                     "Number of data samples does not match in input")
+            # compute the global covariance
+            samples = ma.masked_invalid(self.getSamples(all=True, concat=True))
+            covmat = ma.cov(samples, ddof=0, rowvar=False)
+            try:
+                self.setCovMat(covmat)
+            except np.linalg.LinAlgError:
+                self._warnCovMat(
+                    "global covariance matrix is not positive definite, "
+                    "falling back to block diagonal matrix of bin covariances")
+
+    def _updateMasks(self):
+        NotImplemented  # dummy required for self.setCovMat()
 
     def mask(self, concat=False):
         return self._collect("mask", callback=np.concatenate, apply=concat)
@@ -659,7 +693,13 @@ class RedshiftDataBinned(BaseData, BaseBinned):
             return bin_samples
 
     def hasCovMat(self, require=False):
-        return all(data.hasCovMat(require) for data in self._data)
+        has_covmat = hasattr(self, "_covmat")
+        if not has_covmat:
+            has_covmat = all(data.hasCovMat(require) for data in self._data)
+        if require and not has_covmat:
+            raise AttributeError(
+                "neither individual nor global covariance matrix not set")
+        return has_covmat
 
     @staticmethod
     def _blockMatrix(diagonal_blocks, fill_value=0.0):
@@ -682,17 +722,44 @@ class RedshiftDataBinned(BaseData, BaseBinned):
         matrix[:, mask] = np.nan
         return matrix
 
-    def getCovMat(self, all=False, concat=False):
-        return self._collect(
-            "getCovMat", all, callback=self._blockMatrix, apply=concat)
+    def _parseCovMatType(self, type):
+        allowed_types = ("auto", "global", "block")
+        if type not in allowed_types:
+            raise ValueError(
+                "'type' must be either of ({:}})".format(
+                    ", ".join(allowed_types)))
+        if type is "auto":
+            type = "global" if hasattr(self, "_covmat") else "block"
+        return type
 
-    def getCorrMat(self, all=False, concat=False):
-        return self._collect(
-            "getCorrMat", all, callback=self._blockMatrix, apply=concat)
+    def getCovMat(self, all=False, type="auto"):
+        type = self._parseCovMatType(type)
+        if type == "global":
+            return super().getCovMat(all)
+        else:
+            return self._blockMatrix(self._collect("getCovMat", all))
 
-    def getCovMatInv(self, all=False, concat=False):
-        return self._collect(
-            "getCovMatInv", all, callback=self._blockMatrix, apply=concat)
+    def getCorrMat(self, all=False, type="auto"):
+        type = self._parseCovMatType(type)
+        if type == "global":
+            return super().getCorrMat(all)
+        else:
+            return self._blockMatrix(self._collect("getCorrMat", all))
+
+    def getCovMatInv(self, all=False, concat=False, type="auto"):
+        type = self._parseCovMatType(type)
+        if type == "global":
+            return super().getCovMatInv(all)
+        else:
+            return self._blockMatrix(self._collect("getCovMatInv", all))
+
+    def writeCovMat(
+            self, basepath, head=None, type="auto", ext=DEFAULT_EXT_COV):
+        if head is None:
+            head = "cross-bin covariance matrix of fraction at redshift"
+        np.savetxt(
+            basepath + ext, self.getCovMat(all=True, type=type),
+            header=head, fmt="% 12.5e")
 
     def samplingMethod(self):
         methods = [data.samplingMethod() for data in self._data]
@@ -707,6 +774,8 @@ class RedshiftDataBinned(BaseData, BaseBinned):
         method = self._parseMethod(method)
         samples = [data.getSample(idx, method=method) for data in self._data]
         new = self.__class__(samples[:-1], samples[-1])
+        if hasattr(self, "_covmat"):  # copy global covariance
+            new.setCovMat(self.getCovMat(all=True, type="global"), check=False)
         return new
 
     def pdf(self, all=False, concat=False):
@@ -735,3 +804,8 @@ class RedshiftDataBinned(BaseData, BaseBinned):
             self._data[i].plot(
                 ax=ax, lines=lines, z_offset=z_offset, **kwargs)
         return fig
+
+    def plotCorrMat(self, all=True, type="auto", ax=None, **kwargs):
+        type = self._parseCovMatType(type)
+        return super().plotCorrMat(
+            all=all, type=type, ax=ax, **kwargs)
