@@ -70,12 +70,12 @@ class BaseData(Base):
             np.linalg.cholesky(covmat[new_mask_2D])
             # do some basic checks with the diagonal
             cov_diag = np.diag(covmat)[mask]
-            variance = self.dn(all=True)[mask] ** 2
+            variance = self.dn(all=True, concat=True)[mask] ** 2
             if not np.isclose(cov_diag, variance).all():
                 raise ValueError(
                     "variance and covariance matrix diagonal do not match")
-            self._covmat = covmat
-            self._updateMasks()
+        self._covmat = covmat
+        self._updateMasks()
 
     def getCovMat(self, all=False, **kwargs):
         self.hasCovMat(require=True)
