@@ -181,6 +181,9 @@ class RedshiftHistogram(Base):
 
     def __init__(self, edges, counts, centers=None):
         self._edges = np.array(edges)
+        if np.any(np.diff(self._edges) <= 0.0):
+            raise ValueError(
+                "redshift bin edges must increase monotonically")
         self._n = np.array(counts)
         if np.any(counts < 0.0):
             raise ValueError("'counts' must note be negative")
@@ -194,6 +197,15 @@ class RedshiftHistogram(Base):
                 "length of edges ({:d} - 1), ".format(len(edges)) +
                 "counts ({:d}) and ".format(len(counts)) +
                 "centers ({:d}) do not match".format(len(self._z)))
+        # check that the centers can belong to the edges
+        if centers is not None:
+            idx_insert = np.searchsorted(self._edges, self._z)
+            if np.any(np.diff(idx_insert) != 1):
+                raise ValueError(
+                    "every bin center must fall into one subsequent bin")
+            if np.any(idx_insert < 1) or np.any(idx_insert > edge_shape[0]):
+                raise ValueError(
+                    "bin centers extend below or above the binning")
         self._makePdf()
         self._makeCdf()
 
@@ -307,6 +319,9 @@ class RedshiftData(BaseData):
 
     def __init__(self, z, n, dn):
         self._z = ma.masked_invalid(z)
+        if np.any(np.diff(self._z) <= 0.0):
+            raise ValueError(
+                "redshift sampling points must increase monotonically")
         self._n = ma.masked_invalid(n)
         self._dn = ma.masked_invalid(dn)
         if not (self._z.shape == self._n.shape == self._dn.shape):
