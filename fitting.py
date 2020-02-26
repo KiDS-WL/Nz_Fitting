@@ -179,15 +179,15 @@ class Optimizer(object):
     def getModel(self):
         return self._model
 
-    def chiSquared(self, params, ndof=False):
+    def chiSquared(self, params, ndof=False, use_cov=True):
         model = self._model._optimizerCall(self._data, *params)  # concatenated
         data = self._data.n(concat=True)
         diff_data_model = model - data
-        try:
+        if self._data.hasCovMat() and use_cov:
             invmat = self._data.getCovMatInv()
             chisq = np.matmul(
                 diff_data_model, np.matmul(invmat, diff_data_model))
-        except AttributeError:
+        else:
             errors = self._data.dn(concat=True)
             chisq = np.sum((diff_data_model / errors)**2)
         if ndof:
@@ -263,5 +263,5 @@ class CurveFit(Optimizer):
         # collect the best fit data
         bestfit = FitResult(
             pbest_dict, param_samples_dict, label_dict,
-            self.nDoF(), self.chiSquared(pbest))
+            self.nDoF(), self.chiSquared(pbest, use_cov=use_cov))
         return bestfit
