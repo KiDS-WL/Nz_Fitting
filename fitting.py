@@ -205,14 +205,15 @@ class CurveFit(Optimizer):
     def __init__(self, model, data):
         super().__init__(model, data)
 
-    def _curve_fit_wrapper(self, *args, draw_sample=False, **kwargs):
+    def _curve_fit_wrapper(
+            self, *args, draw_sample=False, use_cov=True, **kwargs):
         # get the data sample to fit
         if draw_sample:
             fit_data = self._data.getSample(args[0])  # the sample index
         else:
             fit_data = self._data  # fiducial fit
         # get the covariance matrix if possible
-        if fit_data.hasCovMat():
+        if fit_data.hasCovMat() and use_cov:
             sigma = fit_data.getCovMat()
         else:
             sigma = fit_data.dn(concat=True)
@@ -227,14 +228,14 @@ class CurveFit(Optimizer):
                 **kwargs)
         return popt
 
-    def optimize(self, n_samples=None, threads=None, **kwargs):
+    def optimize(self, n_samples=None, use_cov=True, threads=None, **kwargs):
         label_dict = OrderedDict(zip(
             self._model.getParamNames(),
             self._model.getParamlabels()))
         guess = self._model.getParamGuess()
         bounds = self._model.getParamBounds()
         # get the best fit parameters
-        pbest = self._curve_fit_wrapper()
+        pbest = self._curve_fit_wrapper(use_cov=use_cov, draw_sample=False)
         self._model.setParamGuess(pbest)
         pbest_dict = OrderedDict(zip(label_dict.keys(), pbest))
         # resample data points for each fit to estimate parameter covariance
@@ -251,7 +252,8 @@ class CurveFit(Optimizer):
         threads = min(threads, n_samples)
         chunksize = n_samples // threads + 1  # optmizes the workload
         threaded_fit = partial(
-            self._curve_fit_wrapper, draw_sample=True, **kwargs)
+            self._curve_fit_wrapper,
+            draw_sample=True, use_cov=use_cov, **kwargs)
         # run in parallel threads
         with multiprocessing.Pool(threads) as pool:
             param_samples = pool.map(
