@@ -29,6 +29,8 @@ class Base:
 
 class BaseData(Base):
 
+    _check_covmat = False
+
     def _parseMethod(self, method):
         if method is None:
             method = self.samplingMethod()
@@ -67,7 +69,8 @@ class BaseData(Base):
             mask = ~self.mask(concat=True) & ~np.diag(covmat.mask)
             n_data = np.count_nonzero(mask)
             new_mask_2D = np.ix_(mask, mask)
-            np.linalg.cholesky(covmat[new_mask_2D])
+            if self._check_covmat:
+                np.linalg.cholesky(covmat[new_mask_2D])
             # do some basic checks with the diagonal
             cov_diag = np.diag(covmat)[mask]
             variance = self.dn(all=True, concat=True)[mask] ** 2
@@ -397,7 +400,7 @@ class RedshiftData(BaseData):
                 header=head_cov, fmt="% 12.5e")
 
     def mask(self, **kwargs):
-        return self._z.mask
+        return self._z.mask.copy()
 
     def len(self, all=False, **kwargs):
         return len(self._z) if all else ma.count(self._z)
@@ -663,7 +666,11 @@ class RedshiftDataBinned(BaseData, BaseBinned):
                     "falling back to block diagonal matrix of bin covariances")
 
     def _updateMasks(self):
-        NotImplemented  # dummy required for self.setCovMat()
+        mask = self.mask(concat=True)
+        # apply to covariance matrix
+        if self.hasCovMat():
+            self._covmat.mask[mask, :] = True
+            self._covmat.mask[:, mask] = True
 
     def mask(self, concat=False):
         return self._collect("mask", callback=np.concatenate, apply=concat)
