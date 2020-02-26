@@ -5,44 +5,47 @@ from matplotlib import pyplot as plt
 def format_variable(
         value, error=None, precision=3, TEX=False, notation="auto",
         use_siunitx=False):
-    exponent_value = "{:.{sign}e}".format(value, sign=precision)
-    if error is None:
-        exponent_error = exponent_value
-    else:
-        exponent_error = "{:.{sign}e}".format(error, sign=precision)
-    exponent = max(
-        int(exponent_value.split("e")[1]),
-        int(exponent_error.split("e")[1]))
-    # decide which formatter to use
-    if notation == "decimal" or (-3 < exponent < 3 and notation != "exp"):
-        expr = " {: {d}.{s}f}".format(
-            value, d=precision + 2, s=precision)
-        if error is not None:
-            if TEX and use_siunitx:
-                expr = "\\num{{{:} \\pm {:{d}.{s}f}}}".format(
-                    expr[1:], error, d=precision + 2, s=precision)
-            elif TEX and not use_siunitx:
-                expr = "${:} \\pm {:{d}.{s}f}$".format(
-                    expr[1:], error, d=precision + 2, s=precision)
-            else:
-                expr += " ± {:{d}.{s}f}".format(
-                    error, d=precision + 2, s=precision)
-    else:
-        norm = 10 ** exponent
-        expr = " {: {d}.{s}f}".format(
-            value / norm, d=precision + 2, s=precision)
-        if TEX:
-            if use_siunitx:
-                expr = "\\num{{{:} \\pm {:{d}.{s}f}d{e:d}}}".format(
-                    expr[1:], error / norm, d=precision + 2,
-                    s=precision, e=exponent)
-            else:
-                expr = "$({:} \\pm {:{d}.{s}f}) \\times 10^{{{e:}}}$".format(
-                    expr[1:], error / norm, d=precision + 2,
-                    s=precision, e=exponent)
+    if np.isfinite(value):
+        exponent_value = "{:.{sign}e}".format(value, sign=precision)
+        if error is None:
+            exponent_error = exponent_value
         else:
-            expr = "({:} ± {:.{sgn}f})e{e:d}".format(
-                expr[1:], error / norm, e=exponent, sgn=precision)
+            exponent_error = "{:.{sign}e}".format(error, sign=precision)
+        exponent = max(
+            int(exponent_value.split("e")[1]),
+            int(exponent_error.split("e")[1]))
+        # decide which formatter to use
+        if notation == "decimal" or (-3 < exponent < 3 and notation != "exp"):
+            expr = " {: {d}.{s}f}".format(
+                value, d=precision + 2, s=precision)
+            if error is not None:
+                if TEX and use_siunitx:
+                    expr = "\\num{{{:} \\pm {:{d}.{s}f}}}".format(
+                        expr[1:], error, d=precision + 2, s=precision)
+                elif TEX and not use_siunitx:
+                    expr = "${:} \\pm {:{d}.{s}f}$".format(
+                        expr[1:], error, d=precision + 2, s=precision)
+                else:
+                    expr += " ± {:{d}.{s}f}".format(
+                        error, d=precision + 2, s=precision)
+        else:
+            norm = 10 ** exponent
+            expr = " {: {d}.{s}f}".format(
+                value / norm, d=precision + 2, s=precision)
+            if TEX:
+                if use_siunitx:
+                    expr = "\\num{{{:} \\pm {:{d}.{s}f}d{e:d}}}".format(
+                        expr[1:], error / norm, d=precision + 2,
+                        s=precision, e=exponent)
+                else:
+                    expr = "$({:} \\pm {:{d}.{s}f}) ".format(
+                        expr[1:], error / norm, d=precision + 2, s=precision)
+                    expr += "\\times 10^{{{:d}}}$".format(exponent)
+            else:
+                expr = "({:} ± {:.{sgn}f})e{e:d}".format(
+                    expr[1:], error / norm, e=exponent, sgn=precision)
+    else:
+        expr = "\\text{NaN}"
     return expr
 
 
