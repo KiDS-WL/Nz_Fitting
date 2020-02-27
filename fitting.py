@@ -213,7 +213,7 @@ class CurveFit(Optimizer):
         else:
             fit_data = self._data  # fiducial fit
         # get the covariance matrix if possible
-        if fit_data.hasCovMat():
+        if fit_data.hasCovMat() and fit_data.getCovMatType() != "diagonal":
             sigma = fit_data.getCovMat()
         else:
             sigma = fit_data.dn(concat=True)
