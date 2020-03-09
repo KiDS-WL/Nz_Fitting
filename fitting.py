@@ -235,7 +235,7 @@ class CurveFit(Optimizer):
         guess = self._model.getParamGuess()
         bounds = self._model.getParamBounds()
         # get the best fit parameters
-        pbest = self._curve_fit_wrapper(draw_sample=False)
+        pbest = self._curve_fit_wrapper(draw_sample=False, **kwargs)
         self._model.setParamGuess(pbest)
         pbest_dict = OrderedDict(zip(label_dict.keys(), pbest))
         # resample data points for each fit to estimate parameter covariance
