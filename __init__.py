@@ -5,7 +5,7 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
 from .data import (RedshiftData, RedshiftDataBinned, RedshiftHistogram,
-                   RedshiftHistogramBinned)
+                   RedshiftHistogramBinned, load_KiDS_bins)
 from .fitting import CurveFit, FitResult
 from .models import (CombModelBinned, GaussianComb, LogGaussianComb,
                      PowerLawBias, ShiftModel, ShiftModelBinned)

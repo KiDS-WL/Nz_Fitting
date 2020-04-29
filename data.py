@@ -899,3 +899,12 @@ class RedshiftDataBinned(BaseData, BaseBinned):
             self._data[i].plot(
                 ax=ax, lines=lines, z_offset=z_offset, **kwargs)
         return fig
+
+
+def load_KiDS_bins(scaledir_path):
+    bin_data = [
+        RedshiftData.read(scaledir_path + "/crosscorr_" + zbin)
+        for zbin in (
+            "0.101z0.301", "0.301z0.501", "0.501z0.701",
+            "0.701z0.901", "0.901z1.201", "0.101z1.201")]
+    return RedshiftDataBinned(bin_data[:-1], bin_data[-1])
