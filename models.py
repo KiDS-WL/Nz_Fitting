@@ -211,7 +211,10 @@ class ShiftModel(BaseModel):
 
     def __call__(self, z_data, *params):
         z = self.getZ(z_data)
-        edges_shifted = z - params[0]
+        try:
+            edges_shifted = z - params[0]
+        except TypeError:
+            edges_shifted = z.edges() - params[0]
         # compute the CDF from a shifted (different) binning
         cdf_shifted = self._model_hist.cdf(edges_shifted)
         cdf_shifted /= cdf_shifted[-1]  # normalize

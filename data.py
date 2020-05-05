@@ -902,9 +902,14 @@ class RedshiftDataBinned(BaseData, BaseBinned):
 
 
 def load_KiDS_bins(scaledir_path):
-    bin_data = [
-        RedshiftData.read(scaledir_path + "/crosscorr_" + zbin)
-        for zbin in (
+    bin_data = []
+    for zbin in (
             "0.101z0.301", "0.301z0.501", "0.501z0.701",
-            "0.701z0.901", "0.901z1.201", "0.101z1.201")]
+            "0.701z0.901", "0.901z1.201", "0.101z1.201"):
+        for prefix in ("/crosscorr_", "/shiftfit_"):
+            try:
+                bin_data.append(
+                    RedshiftData.read(scaledir_path + prefix + zbin))
+            except OSError:
+                pass
     return RedshiftDataBinned(bin_data[:-1], bin_data[-1])
