@@ -913,15 +913,29 @@ class RedshiftDataBinned(BaseData, BaseBinned):
         return fig
 
 
-def load_KiDS_bins(scaledir_path):
+def load_KiDS_bins(scaledir_path, normalize=False):
     bin_data = []
-    for zbin in (
-            "0.101z0.301", "0.301z0.501", "0.501z0.701",
-            "0.701z0.901", "0.901z1.201", "0.101z1.201"):
-        for prefix in ("/crosscorr_", "/shiftfit_"):
-            try:
-                bin_data.append(
-                    RedshiftData.read(scaledir_path + prefix + zbin))
-            except OSError:
-                pass
-    return RedshiftDataBinned(bin_data[:-1], bin_data[-1])
+    try:
+        for zbin in (
+                "0.101z0.301", "0.301z0.501", "0.501z0.701",
+                "0.701z0.901", "0.901z1.201", "0.101z1.201"):
+            for prefix in ("/crosscorr_", "/shiftfit_"):
+                try:
+                    data = RedshiftData.read(scaledir_path + prefix + zbin)
+                    if normalize:
+                        data.normalize()
+                    bin_data.append(data)
+                except OSError:
+                    pass
+        bins = RedshiftDataBinned(bin_data[:-1], bin_data[-1])
+    except IndexError:
+        for zbin in (
+                "0.101z0.301", "0.301z0.501", "0.501z0.701",
+                "0.701z0.901", "0.901z1.201", "0.101z1.201"):
+            for f in os.listdir(scaledir_path):
+                if f.endswith("%s.hist" % zbin):
+                    bin_data.append(
+                        RedshiftHistogram.read(os.path.join(
+                            scaledir_path, os.path.splitext(f)[0])))
+        bins = RedshiftHistogramBinned(bin_data[:-1], bin_data[-1])
+    return bins
