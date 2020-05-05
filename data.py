@@ -619,6 +619,18 @@ class RedshiftData(BaseData):
         else:
             return median
 
+    def normalize(self):
+        """
+        normalize the stored values
+        """
+        norm = self.norm()
+        self._n /= norm
+        self._dn /= norm
+        if self.hasSamples():
+            self.setSamples(self._samples / norm)
+        elif self.hasCovMat():
+            self.setCovMat(self._covmat / norm**2)
+
     def plot(self, ax=None, lines=False, z_offset=0.0, **kwargs):
         if ax is None:
             fig = Figure(1)
