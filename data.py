@@ -411,7 +411,6 @@ class RedshiftData(BaseData):
         file_dat = basepath + ext_dat
         if not os.path.exists(file_dat):
             raise OSError("input data file '{:}' not found".format(file_dat))
-        print("loading " + basepath + ext_dat)
         # load data and create a RedshiftData instance
         data = np.loadtxt(file_dat)
         if len(data.shape) != 2:
@@ -419,12 +418,10 @@ class RedshiftData(BaseData):
         data = RedshiftData(*data.T[:3])
         # try loading samples or a covariance matrix
         if os.path.exists(basepath + ext_boot):
-            print("loading " + basepath + ext_boot)
             samples = np.loadtxt(basepath + ext_boot)
             data.setSamples(samples)
         # if we have samples we do not need the covariance anymore
         elif os.path.exists(basepath + ext_cov):
-            print("loading " + basepath + ext_cov)
             covmat = np.loadtxt(basepath + ext_cov)
             data.setCovMat(covmat)
         return data
@@ -940,7 +937,6 @@ def load_KiDS_bins(scaledir_path, normalize=False):
         if not bins.hasSamples():
             global_covmat_path = os.path.join(
                 scaledir_path, "crosscorr_global.cov")
-            print("loading " + global_covmat_path)
             bins.setCovMat(np.loadtxt(global_covmat_path))
     except IndexError:
         for zbin in (
