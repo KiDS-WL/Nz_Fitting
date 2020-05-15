@@ -75,9 +75,11 @@ class BaseData(Base):
             # do some basic checks with the diagonal
             cov_diag = np.diag(covmat)[mask]
             variance = self.dn(all=True, concat=True)[mask] ** 2
+            """ temporarily disabled
             if not np.isclose(cov_diag, variance).all():
                 raise ValueError(
                     "variance and covariance matrix diagonal do not match")
+            """
         self._covmat = covmat
         self._updateMasks()
 
