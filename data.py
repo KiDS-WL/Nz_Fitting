@@ -974,7 +974,10 @@ def load_KiDS_bins(scaledir_path, normalize=False, load_master=True):
         if not bins.hasSamples():
             global_covmat_path = os.path.join(
                 scaledir_path, "crosscorr_global.cov")
-            bins.setCovMat(np.loadtxt(global_covmat_path))
+            # remove the master sample if necessary
+            n_used = sum(joint_data.len(all=True))
+            global_covmat = global_covmat[:n_used, :n_used]
+            bins.setCovMat(global_covmat)
     except IndexError:
         for zbin in zkeys:
             for f in os.listdir(scaledir_path):
