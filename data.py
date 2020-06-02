@@ -181,6 +181,8 @@ class BaseData(Base):
 
 class BaseBinned(Base):
 
+    _has_master = False
+
     def __len__(self):
         return len(self._data)
 
@@ -193,19 +195,32 @@ class BaseBinned(Base):
         for d in data:
             assert(np.all(d == ref))
 
+    def hasMaster(self):
+        return self._has_master
+
     def iterData(self):
         for data in self._data:
             yield data
 
     def iterBins(self):
-        for data in self._data[:-1]:
+        if self._has_master:
+            dsets = self._data[:-1]
+        else:
+            dsets = self._data
+        for data in dsets:
             yield data
 
     def getBins(self):
-        return self._data[:-1]
+        if self._has_master:
+            return self._data[:-1]
+        else:
+            return self._data
 
     def getMaster(self):
-        return self._data[-1]
+        if self._has_master:
+            return self._data[-1]
+        else:
+            raise AttributeError("no master data set")
 
     def getData(self):
         return self._data
@@ -659,8 +674,13 @@ class RedshiftData(BaseData):
 
 class RedshiftHistogramBinned(BaseBinned):
 
-    def __init__(self, bins, master):
-        self._data = [*bins, master]
+    def __init__(self, bins, master=None):
+        if master is None:
+            self._data = bins
+            self._has_master = False
+        else:
+            self._data = [*bins, master]
+            self._has_master = True
         for data in self._data:
             if not isinstance(data, RedshiftHistogram):
                 raise TypeError(
@@ -713,8 +733,13 @@ class RedshiftDataBinned(BaseData, BaseBinned):
 
     _covmat_types = ("diagonal", "blockdiag", "block", "global")
 
-    def __init__(self, bins, master):
-        self._data = [*bins, master]
+    def __init__(self, bins, master=None):
+        if master is None:
+            self._data = bins
+            self._has_master = False
+        else:
+            self._data = [*bins, master]
+            self._has_master = True
         for data in self._data:
             if not isinstance(data, RedshiftData):
                 raise TypeError(
@@ -883,7 +908,11 @@ class RedshiftDataBinned(BaseData, BaseBinned):
     def getSample(self, idx=None, method=None):
         method = self._parseMethod(method)
         samples = [data.getSample(idx, method=method) for data in self._data]
-        new = self.__class__(samples[:-1], samples[-1])
+        if self._has_master:
+            new = self.__class__(samples[:-1], samples[-1])
+            new._has_master = True
+        else:
+            new = self.__class__(samples)
         # set the same covariance state
         new.setCovMatType(self.getCovMatType())
         if hasattr(self, "_covmat"):  # copy global covariance
