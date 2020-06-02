@@ -64,7 +64,7 @@ class BaseData(Base):
             raise ValueError(
                 "expected covariance matrix of shape " +
                 "({n:d}, {n:d}), ".format(n=n_data) + 
-                "but got shape {:s}".format(covmat.shape))
+                "but got shape {:s}".format(str(covmat.shape)))
         if check:
             # check if it is positive definite
             mask = ~self.mask(concat=True) & ~np.diag(covmat.mask)
