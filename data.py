@@ -950,12 +950,18 @@ class RedshiftDataBinned(BaseData, BaseBinned):
         return fig
 
 
-def load_KiDS_bins(scaledir_path, normalize=False):
+def load_KiDS_bins(scaledir_path, normalize=False, load_master=True):
     bin_data = []
+    if load_master:
+        zkeys = (
+            "0.101z0.301", "0.301z0.501", "0.501z0.701",
+            "0.701z0.901", "0.901z1.201", "0.101z1.201")
+    else:
+        zkeys = (
+            "0.101z0.301", "0.301z0.501", "0.501z0.701",
+            "0.701z0.901", "0.901z1.201")
     try:
-        for zbin in (
-                "0.101z0.301", "0.301z0.501", "0.501z0.701",
-                "0.701z0.901", "0.901z1.201", "0.101z1.201"):
+        for zbin in zkeys:
             for prefix in ("/crosscorr_", "/shiftfit_"):
                 try:
                     data = RedshiftData.read(scaledir_path + prefix + zbin)
@@ -970,9 +976,7 @@ def load_KiDS_bins(scaledir_path, normalize=False):
                 scaledir_path, "crosscorr_global.cov")
             bins.setCovMat(np.loadtxt(global_covmat_path))
     except IndexError:
-        for zbin in (
-                "0.101z0.301", "0.301z0.501", "0.501z0.701",
-                "0.701z0.901", "0.901z1.201", "0.101z1.201"):
+        for zbin in zkeys:
             for f in os.listdir(scaledir_path):
                 if f.endswith("%s.hist" % zbin):
                     bin_data.append(
