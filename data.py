@@ -961,6 +961,7 @@ def load_KiDS_bins(scaledir_path, normalize=False, load_master=True):
             "0.101z0.301", "0.301z0.501", "0.501z0.701",
             "0.701z0.901", "0.901z1.201")
     try:
+        global_cov_name = "crosscorr_global.cov"
         for zbin in zkeys:
             for prefix in ("/crosscorr_", "/shiftfit_"):
                 try:
@@ -968,12 +969,12 @@ def load_KiDS_bins(scaledir_path, normalize=False, load_master=True):
                     if normalize:
                         data.normalize()
                     bin_data.append(data)
+                    global_cov_name = "shiftfit_global.cov"
                 except OSError:
                     pass
         bins = RedshiftDataBinned(bin_data[:-1], bin_data[-1])
         if not bins.hasSamples():
-            global_covmat_path = os.path.join(
-                scaledir_path, "crosscorr_global.cov")
+            global_covmat_path = os.path.join(scaledir_path, global_cov_name)
             global_covmat = np.loadtxt(global_covmat_path)
             # remove the master sample if necessary
             n_used = sum(bins.len(all=True))
