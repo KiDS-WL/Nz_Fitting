@@ -974,6 +974,7 @@ def load_KiDS_bins(scaledir_path, normalize=False, load_master=True):
         if not bins.hasSamples():
             global_covmat_path = os.path.join(
                 scaledir_path, "crosscorr_global.cov")
+            global_covmat = np.loadtxt(global_covmat_path)
             # remove the master sample if necessary
             n_used = sum(bins.len(all=True))
             global_covmat = global_covmat[:n_used, :n_used]
